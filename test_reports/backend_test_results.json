@@ -1,0 +1,167 @@
+{
+  "summary": {
+    "total_tests": 26,
+    "passed_tests": 26,
+    "success_rate": 100.0,
+    "test_document_id": "02dea95a-4022-4e40-9b17-5f260d309ab2"
+  },
+  "results": [
+    {
+      "test": "Health Check",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.109128"
+    },
+    {
+      "test": "Admin Login",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.371394"
+    },
+    {
+      "test": "Get Current User",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.407521"
+    },
+    {
+      "test": "Dashboard Stats",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.445833"
+    },
+    {
+      "test": "List Documents",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.484105"
+    },
+    {
+      "test": "Upload Document",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.560792"
+    },
+    {
+      "test": "Get Document Detail",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.592774"
+    },
+    {
+      "test": "Download Document",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.633477"
+    },
+    {
+      "test": "Upload Document Version",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.678489"
+    },
+    {
+      "test": "Apply Legal Hold",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.716800"
+    },
+    {
+      "test": "Release Legal Hold",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.761630"
+    },
+    {
+      "test": "Declare Record",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.796112"
+    },
+    {
+      "test": "Search Documents",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.831346"
+    },
+    {
+      "test": "List Users",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.862777"
+    },
+    {
+      "test": "List Roles",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.903877"
+    },
+    {
+      "test": "List Groups",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:22.980733"
+    },
+    {
+      "test": "List Retention Schedules",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.015436"
+    },
+    {
+      "test": "List Audit Events",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.047799"
+    },
+    {
+      "test": "Get Disposition Queue",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.080392"
+    },
+    {
+      "test": "Bulk Upload Documents",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.118339"
+    },
+    {
+      "test": "Enhanced Search with Date Filters",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.151230"
+    },
+    {
+      "test": "Enhanced Search with File Type Filters",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.190144"
+    },
+    {
+      "test": "Document Preview",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.225702"
+    },
+    {
+      "test": "Get Notifications",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.259196"
+    },
+    {
+      "test": "Check Disposition Deadlines",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.295138"
+    },
+    {
+      "test": "Get Notification Settings",
+      "success": true,
+      "details": "",
+      "timestamp": "2026-01-25T16:50:23.326906"
+    }
+  ],
+  "timestamp": "2026-01-25T16:50:23.327741"
+}

@@ -1,0 +1,136 @@
+{
+  "identity": {
+    "persona": "E1: The Anti-AI Designer",
+    "philosophy": "Fusion over Imitation. Emotion First. Content is King.",
+    "anti_patterns": [
+      "Purple/Teal gradients",
+      "Inter font for headings",
+      "Centered layouts",
+      "Generic 'SaaS Blue' palettes"
+    ]
+  },
+  "design_system": {
+    "theme_strategy": "Swiss Archival (Light Mode Default)",
+    "typography": {
+      "headings": {
+        "family": "Manrope",
+        "weights": ["600", "800"],
+        "usage": "Page titles, Section headers, Modal titles",
+        "letter_spacing": "-0.02em"
+      },
+      "body": {
+        "family": "Public Sans",
+        "weights": ["400", "500"],
+        "usage": "General text, Form labels, Table data",
+        "letter_spacing": "0em"
+      },
+      "mono": {
+        "family": "JetBrains Mono",
+        "weights": ["400"],
+        "usage": "Document IDs, Audit Logs, Metadata keys",
+        "letter_spacing": "0em"
+      }
+    },
+    "colors": {
+      "light": {
+        "background": "#FDFDFC",
+        "surface": "#FFFFFF",
+        "surface_secondary": "#F8F9FA",
+        "text_primary": "#0F172A",
+        "text_secondary": "#64748B",
+        "border": "#E2E8F0",
+        "primary": "#0F172A",
+        "primary_foreground": "#FFFFFF",
+        "accent": "#F97316",
+        "accent_foreground": "#FFFFFF",
+        "destructive": "#EF4444",
+        "success": "#10B981"
+      },
+      "dark": {
+        "background": "#0A0A0A",
+        "surface": "#171717",
+        "surface_secondary": "#262626",
+        "text_primary": "#F8FAFC",
+        "text_secondary": "#94A3B8",
+        "border": "#262626",
+        "primary": "#F8FAFC",
+        "primary_foreground": "#0F172A",
+        "accent": "#FB923C",
+        "accent_foreground": "#0F172A",
+        "destructive": "#F87171",
+        "success": "#34D399"
+      }
+    },
+    "visual_enhancers": {
+      "borders": "1px solid #E2E8F0 (Light) / #262626 (Dark). No soft shadows.",
+      "radius": "rounded-none or rounded-sm (max 4px)",
+      "textures": "Subtle noise overlay on sidebar/header for 'paper' feel",
+      "micro_interactions": "Hovering a table row adds a 2px accent-colored border on the left edge"
+    },
+    "layout": {
+      "grid_system": "Bento Grid Mode B (High Density)",
+      "spacing_scale": "Tailwind default but doubled for section gaps (p-8, p-12)",
+      "container_padding": "px-6 py-8",
+      "sidebar_width": "w-64"
+    }
+  },
+  "components": {
+    "buttons": {
+      "style": "Sharp edges or pill-shaped. Primary: Solid Slate-900. Secondary: White with Border.",
+      "hover": "Translate-y-[-1px] + Shadow-sm"
+    },
+    "cards": {
+      "style": "Flat, 1px border, no shadow. White background.",
+      "hover": "Border color darkens to Slate-400"
+    },
+    "inputs": {
+      "style": "Flat, 1px border, bg-transparent. Focus: Ring-1 Ring-Accent"
+    },
+    "tables": {
+      "style": "Dense, 1px border-b separators. Header: Uppercase, tracking-wider, text-xs, text-secondary."
+    },
+    "modals": {
+      "style": "Backdrop blur-sm. Modal: White, sharp corners, 1px border."
+    }
+  },
+  "assets": {
+    "images": {
+      "login_background": {
+        "url": "https://images.unsplash.com/photo-1612538498488-226257115cc4?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Minimalist white architectural tiles",
+        "usage": "Full screen background for login page with 50% white overlay"
+      },
+      "empty_state_docs": {
+        "url": "https://images.unsplash.com/photo-1704807395127-898b64191a16?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Abstract white wavy lines",
+        "usage": "Center of dashboard when no documents exist"
+      },
+      "user_avatar_placeholder": {
+        "url": "https://images.unsplash.com/photo-1576558656222-ba66febe3dec?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "alt": "Professional headshot",
+        "usage": "Default avatar for demo user"
+      }
+    },
+    "icons": {
+      "library": "lucide-react",
+      "style": "Stroke width 1.5px (Thin/Elegant)"
+    }
+  },
+  "instructions_to_main_agent": [
+    "INSTALL FONTS: Add '@fontsource/manrope', '@fontsource/public-sans', '@fontsource/jetbrains-mono' to package.json",
+    "TAILWIND CONFIG: Update font families in tailwind.config.js to match the typography section.",
+    "THEME SETUP: Implement the 'Swiss Archival' color palette in index.css CSS variables.",
+    "LAYOUT: Build a 'DashboardLayout' component with a fixed sidebar and scrollable main area.",
+    "TABLES: Use Shadcn Table component but strip the rounded corners and add the 'hover:border-l-2' interaction.",
+    "FORMS: Use React Hook Form + Zod + Shadcn Form components.",
+    "NOTIFICATIONS: Use 'sonner' for toast notifications.",
+    "TESTING: Add 'data-testid' to all interactive elements (buttons, inputs, rows)."
+  ],
+  "universal_guidelines": [
+    "Avoid generic 'SaaS Blue' gradients.",
+    "Do not center-align main content; use left alignment for readability.",
+    "Use 2-3x more spacing than typical designs.",
+    "Every interaction needs a micro-animation.",
+    "Dark colors look good when used independently without gradients."
+  ]
+}

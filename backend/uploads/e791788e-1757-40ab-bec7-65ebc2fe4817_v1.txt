@@ -1,0 +1,2 @@
+This is test document 3 for bulk upload testing.
+Content for document 3.
