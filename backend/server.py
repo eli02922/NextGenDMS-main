@@ -23,6 +23,16 @@ from email.mime.multipart import MIMEMultipart
 import asyncio
 import hashlib
 import base64
+import psutil
+import threading
+import time
+from queue import Queue
+import multiprocessing
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+from typing import Tuple, Union
+from pydantic import BaseModel, Field, ConfigDict
+from datetime import datetime
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -67,11 +77,155 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ==================== MODELS ====================
+# ==================== KEYWORD CONFIGURATION ====================
 
+FINANCIAL_KEYWORDS = {
+    "revenue": ["revenue", "sales", "income", "turnover", "gross revenue", "net revenue"],
+    "expenses": ["expenses", "costs", "expenditure", "operating expenses", "overhead"],
+    "profit": ["profit", "net income", "earnings", "bottom line", "net profit", "gross profit"],
+    "assets": ["assets", "property", "equipment", "inventory", "current assets", "fixed assets"],
+    "liabilities": ["liabilities", "debt", "loans", "payables", "current liabilities", "long-term debt"],
+    "equity": ["equity", "shareholder equity", "retained earnings", "capital"],
+    "cash_flow": ["cash flow", "operating cash", "financing cash", "investing cash"],
+    "budget": ["budget", "forecast", "projection", "plan", "estimate"],
+    "financial_statement": ["balance sheet", "income statement", "cash flow statement", "profit and loss", "P&L"],
+    "quarterly": ["quarterly", "q1", "q2", "q3", "q4", "quarter"],
+    "annual": ["annual", "yearly", "fiscal year", "annual report", "10-k", "10-q"],
+    "audit": ["audit", "audited", "auditor", "audit report", "internal audit"],
+    "tax": ["tax", "taxation", "vat", "gst", "income tax", "corporate tax"]
+}
+
+MEETING_KEYWORDS = {
+    "meeting": ["meeting", "conference", "workshop", "seminar", "briefing", "huddle"],
+    "agenda": ["agenda", "schedule", "program", "plan", "outline"],
+    "minutes": ["minutes", "notes", "summary", "record", "proceedings"],
+    "attendees": ["attendees", "participants", "members", "present", "absent"],
+    "actions": ["action items", "tasks", "to-do", "next steps", "follow up"],
+    "decisions": ["decisions", "resolutions", "conclusions", "outcomes", "findings"],
+    "presentation": ["presentation", "slide", "deck", "powerpoint", "ppt"],
+    "discussion": ["discussion", "dialogue", "conversation", "talk", "debate"],
+    "review": ["review", "evaluation", "assessment", "analysis", "appraisal"],
+    "planning": ["planning", "strategy", "roadmap", "timeline", "schedule"],
+    "client": ["client", "customer", "account", "partner", "stakeholder"],
+    "steering": ["steering committee", "board meeting", "executive", "directors", "management"]
+}
+
+# File extensions to process
+VALID_FILE_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt'}
+class BatchJob(BaseModel):
+    """Batch processing job"""
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    description: Optional[str] = None
+    status: str  # pending, running, completed, failed, cancelled
+    total_documents: int = 0
+    processed_documents: int = 0
+    successful: int = 0
+    skipped: int = 0
+    failed: int = 0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    created_by: str
+    created_at: str
+    parameters: Dict[str, Any] = {}
+    
+class FinancialReportMetadata(BaseModel):
+    """Metadata specific to financial reports"""
+    model_config = ConfigDict(extra="ignore")
+    report_type: str = Field(..., description="quarterly, annual, audit, budget, forecast, income_statement, balance_sheet, cash_flow")
+    period: str = Field(..., description="Q1 2024, FY2023, Jan-Dec 2024")
+    fiscal_year: Optional[int] = None
+    quarter: Optional[int] = Field(None, ge=1, le=4)
+    currency: str = "USD"
+    revenue_amount: Optional[float] = None
+    net_income: Optional[float] = None
+    total_assets: Optional[float] = None
+    total_liabilities: Optional[float] = None
+    eps: Optional[float] = None  # Earnings Per Share
+    auditor: Optional[str] = None
+    cfo_approved: bool = False
+    board_approved: bool = False
+    filing_date: Optional[str] = None
+    due_date: Optional[str] = None
+    department: str = "Finance"
+    confidentiality_level: str = "confidential"
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str
+    
+class MeetingMetadata(BaseModel):
+    """Metadata specific to meetings"""
+    model_config = ConfigDict(extra="ignore")
+    meeting_type: str = Field(..., description="client, internal, planning, review, steering_committee, board, investor, team")
+    date: str
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    location: Optional[str] = None
+    meeting_room: Optional[str] = None
+    virtual_link: Optional[str] = None
+    organizer: str
+    attendees: List[str] = []
+    expected_attendees: List[str] = []
+    agenda_items: List[str] = []
+    action_items: List[str] = []
+    decisions_made: List[str] = []
+    follow_up_date: Optional[str] = None
+    next_meeting_date: Optional[str] = None
+    meeting_series: Optional[str] = None  # Weekly Sync, Monthly Review, etc.
+    recurring: bool = False
+    recurring_pattern: Optional[str] = None  # weekly, biweekly, monthly, quarterly
+    confidentiality_level: str = "internal"
+
+
+    
+class BatchJob(BaseModel):
+    """Batch processing job"""
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    description: Optional[str] = None
+    status: str  # pending, running, completed, failed, cancelled
+    total_documents: int = 0
+    processed_documents: int = 0
+    successful: int = 0
+    skipped: int = 0
+    failed: int = 0
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    created_by: str
+    created_at: str
+    parameters: Dict[str, Any] = {}
+
+class ValidationResult(BaseModel):
+    """Document validation result"""
+    model_config = ConfigDict(extra="ignore")
+    document_id: Optional[str] = None
+    filename: str
+    is_valid: bool
+    document_type: Optional[str] = None  # financial_report, meeting, other
+    validation_errors: List[str] = []
+    extracted_keywords: List[str] = []
+    keyword_matches: Dict[str, int] = {}  # keyword -> count
+    confidence_score: float = 0.0
+    should_process: bool = False
+
+class DocumentMetadataEnriched(BaseModel):
+    """Enhanced document metadata combining financial and meeting metadata"""
+    model_config = ConfigDict(extra="ignore")
+    document_id: str
+    document_type: str  # financial_report, meeting_minutes, presentation, contract, other
+    financial_metadata: Optional[FinancialReportMetadata] = None
+    meeting_metadata: Optional[MeetingMetadata] = None
+    extracted_keywords: List[str] = []
+    validation_status: str = "pending"  # pending, validated, rejected
+    validation_reason: Optional[str] = None
+    processed_at: Optional[str] = None
+    processing_duration_ms: Optional[int] = None
+    version: int = 1
     
 class UserCreate(UserBase):
     password: str
@@ -289,7 +443,8 @@ class EmailNotification(BaseModel):
     sent: bool
     sent_at: Optional[str] = None
     created_at: str
-
+    
+# ==================== VALIDATION & EXTRACTION FUNCTIONS ====================
 # ==================== AUTH HELPERS ====================
 
 def create_token(user_id: str, email: str, roles: List[str], groups: List[str]) -> str:
@@ -632,6 +787,1412 @@ def extract_text(file_content: bytes, content_type: str, filename: str) -> str:
         except:
             return ""
     return ""
+
+def validate_document_type(filename: str, content: str) -> ValidationResult:
+    """Validate if document is a financial report or meeting document"""
+    filename_lower = filename.lower()
+    content_lower = content.lower() if content else ""
+    
+    # Check file extension
+    file_ext = Path(filename).suffix.lower()
+    if file_ext not in VALID_FILE_EXTENSIONS:
+        return ValidationResult(
+            filename=filename,
+            is_valid=False,
+            validation_errors=[f"Invalid file extension: {file_ext}. Only {', '.join(VALID_FILE_EXTENSIONS)} allowed"]
+        )
+    
+    # Initialize result
+    result = ValidationResult(
+        filename=filename,
+        is_valid=True,
+        document_type="other"
+    )
+    
+    # Count keyword matches
+    financial_matches = {}
+    meeting_matches = {}
+    
+    # Check financial keywords
+    for category, keywords in FINANCIAL_KEYWORDS.items():
+        count = 0
+        for keyword in keywords:
+            if keyword in content_lower:
+                count += content_lower.count(keyword)
+        if count > 0:
+            financial_matches[category] = count
+            result.extracted_keywords.extend(keywords[:2])  # Add first 2 keywords from category
+    
+    # Check meeting keywords
+    for category, keywords in MEETING_KEYWORDS.items():
+        count = 0
+        for keyword in keywords:
+            if keyword in content_lower:
+                count += content_lower.count(keyword)
+        if count > 0:
+            meeting_matches[category] = count
+            result.extracted_keywords.extend(keywords[:2])
+    
+    # Also check filename patterns
+    filename_patterns = {
+        "financial_report": [r'financial.*report', r'q[1-4].*\d{4}', r'fy\d{4}', r'budget', r'forecast', r'audit'],
+        "meeting": [r'meeting.*minutes', r'agenda', r'minutes.*meeting', r'steering.*committee', r'board.*meeting']
+    }
+    
+    for doc_type, patterns in filename_patterns.items():
+        for pattern in patterns:
+            if re.search(pattern, filename_lower, re.IGNORECASE):
+                if doc_type == "financial_report":
+                    result.document_type = "financial_report"
+                elif doc_type == "meeting":
+                    result.document_type = "meeting"
+                break
+    
+    # Determine document type based on keyword matches
+    total_financial_matches = sum(financial_matches.values())
+    total_meeting_matches = sum(meeting_matches.values())
+    
+    if total_financial_matches > 0 or total_meeting_matches > 0:
+        result.keyword_matches = {**financial_matches, **meeting_matches}
+        
+        # Calculate confidence score (0-100)
+        total_keywords = len(content_lower.split())
+        if total_keywords > 0:
+            total_matches = total_financial_matches + total_meeting_matches
+            result.confidence_score = min(100.0, (total_matches / total_keywords) * 1000)
+        
+        # Determine document type
+        if total_financial_matches > total_meeting_matches:
+            result.document_type = "financial_report"
+        elif total_meeting_matches > total_financial_matches:
+            result.document_type = "meeting"
+        else:
+            result.document_type = "other"
+        
+        # Set should_process flag
+        result.should_process = (total_financial_matches >= 3 or total_meeting_matches >= 3)
+    
+    return result
+
+def extract_financial_metadata(content: str, filename: str) -> Optional[FinancialReportMetadata]:
+    """Extract financial metadata from document content"""
+    content_lower = content.lower()
+    
+    # Determine report type
+    report_type = "other"
+    if any(word in content_lower for word in ["quarterly", "q1", "q2", "q3", "q4"]):
+        report_type = "quarterly"
+    elif any(word in content_lower for word in ["annual", "yearly", "fiscal year"]):
+        report_type = "annual"
+    elif "audit" in content_lower:
+        report_type = "audit"
+    elif "budget" in content_lower:
+        report_type = "budget"
+    elif "forecast" in content_lower:
+        report_type = "forecast"
+    
+    # Extract period
+    period = "Unknown"
+    period_patterns = [
+        r'Q[1-4]\s+\d{4}',
+        r'\d{4}.*Q[1-4]',
+        r'FY\s*\d{4}',
+        r'Fiscal Year\s*\d{4}',
+        r'Year.*\d{4}',
+        r'\d{4}.*Report'
+    ]
+    
+    for pattern in period_patterns:
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            period = match.group(0)
+            break
+    
+    # Extract fiscal year
+    fiscal_year = None
+    year_match = re.search(r'\b(20\d{2})\b', period)
+    if year_match:
+        try:
+            fiscal_year = int(year_match.group(1))
+        except:
+            pass
+    
+    # Extract quarter
+    quarter = None
+    quarter_match = re.search(r'Q([1-4])', content, re.IGNORECASE)
+    if quarter_match:
+        try:
+            quarter = int(quarter_match.group(1))
+        except:
+            pass
+    
+    # Extract currency
+    currency = "USD"
+    currency_matches = re.findall(r'\$(?!\d)|USD|EUR|GBP|JPY|AUD|CAD', content)
+    if currency_matches:
+        if "$" in currency_matches[0]:
+            currency = "USD"
+        else:
+            currency = currency_matches[0]
+    
+    # Extract financial amounts (simplified regex)
+    amounts = {
+        'revenue': extract_amount(content, ['revenue', 'sales', 'income']),
+        'net_income': extract_amount(content, ['net income', 'net profit', 'earnings']),
+        'total_assets': extract_amount(content, ['total assets', 'assets']),
+        'total_liabilities': extract_amount(content, ['total liabilities', 'liabilities'])
+    }
+    
+    # Extract dates
+    filing_date = extract_date(content, ['filed', 'submitted', 'filing date'])
+    due_date = extract_date(content, ['due', 'deadline', 'submission date'])
+    
+    return FinancialReportMetadata(
+        report_type=report_type,
+        period=period,
+        fiscal_year=fiscal_year,
+        quarter=quarter,
+        currency=currency,
+        revenue_amount=amounts['revenue'],
+        net_income=amounts['net_income'],
+        total_assets=amounts['total_assets'],
+        total_liabilities=amounts['total_liabilities'],
+        filing_date=filing_date,
+        due_date=due_date
+    )
+
+def extract_meeting_metadata(content: str, filename: str) -> Optional[MeetingMetadata]:
+    """Extract meeting metadata from document content"""
+    # Determine meeting type
+    meeting_type = "internal"
+    content_lower = content.lower()
+    
+    if any(word in content_lower for word in ["client", "customer", "account"]):
+        meeting_type = "client"
+    elif "steering committee" in content_lower:
+        meeting_type = "steering_committee"
+    elif "board" in content_lower:
+        meeting_type = "board"
+    elif "investor" in content_lower:
+        meeting_type = "investor"
+    elif "planning" in content_lower:
+        meeting_type = "planning"
+    elif "review" in content_lower:
+        meeting_type = "review"
+    
+    # Extract date
+    date = extract_date(content, ['date:', 'meeting date:', 'on'])
+    if not date:
+        # Try to extract from filename
+        date_match = re.search(r'\d{4}[-_]\d{2}[-_]\d{2}', filename)
+        if date_match:
+            date = date_match.group(0).replace('_', '-')
+    
+    # Extract time
+    start_time = None
+    end_time = None
+    time_match = re.search(r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)\s*[-–]\s*(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm)?)', content, re.IGNORECASE)
+    if time_match:
+        start_time = time_match.group(1).strip()
+        end_time = time_match.group(2).strip()
+    
+    # Extract duration
+    duration_minutes = None
+    duration_match = re.search(r'(\d+)\s*(?:minute|min|hour|hr)', content_lower)
+    if duration_match:
+        duration = int(duration_match.group(1))
+        if 'hour' in duration_match.group(0) or 'hr' in duration_match.group(0):
+            duration_minutes = duration * 60
+        else:
+            duration_minutes = duration
+    
+    # Extract location
+    location = None
+    location_match = re.search(r'Location[:\-]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+    if location_match:
+        location = location_match.group(1).strip()
+    
+    # Extract organizer
+    organizer = "Unknown"
+    organizer_match = re.search(r'(?:Organizer|Chair|Facilitator|Host)[:\-]\s*(.+?)(?:\n|$)', content, re.IGNORECASE)
+    if organizer_match:
+        organizer = organizer_match.group(1).strip()
+    
+    # Extract attendees (simplified)
+    attendees = []
+    attendees_section = re.search(r'Attendees?[:\-]\s*(.+?)(?:\n\n|\Z)', content, re.IGNORECASE | re.DOTALL)
+    if attendees_section:
+        attendees_text = attendees_section.group(1)
+        # Simple extraction - split by common delimiters
+        attendee_list = re.split(r'[,\n•\-*]', attendees_text)
+        attendees = [a.strip() for a in attendee_list if a.strip() and len(a.strip()) > 2][:20]  # Limit to 20
+    
+    # Extract agenda items
+    agenda_items = []
+    agenda_section = re.search(r'Agenda[:\-]\s*(.+?)(?:\n\n|\Z)', content, re.IGNORECASE | re.DOTALL)
+    if agenda_section:
+        agenda_text = agenda_section.group(1)
+        agenda_lines = agenda_text.split('\n')
+        for line in agenda_lines:
+            line = line.strip()
+            if line and len(line) < 200:  # Reasonable length for agenda item
+                # Remove bullet points, numbers
+                clean_line = re.sub(r'^[•\-\*\d\.\)\s]+', '', line)
+                if clean_line:
+                    agenda_items.append(clean_line)
+    
+    # Check if recurring
+    recurring = any(word in content_lower for word in ["weekly", "monthly", "quarterly", "recurring", "regular"])
+    recurring_pattern = None
+    if recurring:
+        if "weekly" in content_lower:
+            recurring_pattern = "weekly"
+        elif "monthly" in content_lower:
+            recurring_pattern = "monthly"
+        elif "quarterly" in content_lower:
+            recurring_pattern = "quarterly"
+    
+    return MeetingMetadata(
+        meeting_type=meeting_type,
+        date=date or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        start_time=start_time,
+        end_time=end_time,
+        duration_minutes=duration_minutes,
+        location=location,
+        organizer=organizer,
+        attendees=attendees,
+        agenda_items=agenda_items[:10],  # Limit to 10
+        recurring=recurring,
+        recurring_pattern=recurring_pattern
+    )
+
+def extract_amount(content: str, keywords: List[str]) -> Optional[float]:
+    """Extract monetary amount near keywords"""
+    for keyword in keywords:
+        pattern = rf'{keyword}[:\-\s]*\$?\s*([\d,]+(?:\.\d{2})?)'
+        match = re.search(pattern, content, re.IGNORECASE)
+        if match:
+            try:
+                amount_str = match.group(1).replace(',', '')
+                return float(amount_str)
+            except:
+                pass
+    return None
+
+def extract_date(content: str, keywords: List[str]) -> Optional[str]:
+    """Extract date near keywords"""
+    date_patterns = [
+        r'\d{4}-\d{2}-\d{2}',
+        r'\d{2}/\d{2}/\d{4}',
+        r'\d{2}-\d{2}-\d{4}',
+        r'(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}'
+    ]
+    
+    for keyword in keywords:
+        for pattern in date_patterns:
+            # Look for date near keyword
+            search_pattern = rf'{keyword}.*?({pattern})'
+            match = re.search(search_pattern, content, re.IGNORECASE)
+            if match:
+                return match.group(1)
+    
+    # If no keyword-specific date, look for any date
+    for pattern in date_patterns:
+        match = re.search(pattern, content)
+        if match:
+            return match.group(0)
+    
+    return None
+
+# ==================== HIGH-PERFORMANCE BACKGROUND PROCESSOR ====================
+
+class DocumentBatchProcessor:
+    """Processes documents in batches without threading issues"""
+    
+    def __init__(self, max_concurrent=10, batch_size=1000):
+        self.max_concurrent = max_concurrent
+        self.batch_size = batch_size
+        self.is_running = False
+        self.stats = {
+            'total_processed': 0,
+            'total_validated': 0,
+            'total_rejected': 0,
+            'financial_reports': 0,
+            'meeting_docs': 0,
+            'other_docs': 0,
+            'last_run_time': None,
+            'current_speed_docs_per_min': 0,
+            'queue_size': 0
+        }
+    
+    async def scan_unprocessed_documents(self, limit=100000):
+        """Find documents that need processing"""
+        try:
+            # Look for documents without enriched metadata
+            pipeline = [
+                {
+                    "$match": {
+                        "deleted": False,
+                        "$or": [
+                            {"metadata_extracted": {"$ne": True}},
+                            {"metadata_extracted": {"$exists": False}}
+                        ]
+                    }
+                },
+                {"$project": {"id": 1, "versions": 1, "_id": 0}},
+                {"$sort": {"created_at": 1}},  # Oldest first
+                {"$limit": limit}
+            ]
+            
+            documents = await db.documents.aggregate(pipeline).to_list(length=limit)
+            
+            logger.info(f"Found {len(documents)} documents needing metadata extraction")
+            return documents
+            
+        except Exception as e:
+            logger.error(f"Error scanning documents: {e}")
+            return []
+    
+    async def process_document(self, document):
+        """Process a single document asynchronously"""
+        start_time = time.time()
+        
+        try:
+            doc_id = document["id"]
+            latest_version = max(document["versions"], key=lambda x: x["version_number"])
+            
+            # Get file path
+            file_path = Path(latest_version.get("storage_path"))
+            if not file_path.exists():
+                # Try uploads directory
+                file_path = UPLOAD_DIR / file_path.name
+                if not file_path.exists():
+                    return {
+                        "status": "failed",
+                        "reason": "File not found",
+                        "document_id": doc_id
+                    }
+            
+            # Read and extract text
+            try:
+                with open(file_path, 'rb') as f:
+                    file_content = f.read()
+                
+                extracted_text = extract_text(
+                    file_content,
+                    latest_version.get("content_type", ""),
+                    latest_version.get("filename", "")
+                )
+                
+                if not extracted_text or len(extracted_text) < 10:
+                    # Mark as processed but not enriched
+                    await db.documents.update_one(
+                        {"id": doc_id},
+                        {"$set": {"metadata_extracted": True}}
+                    )
+                    return {
+                        "status": "skipped",
+                        "reason": "No text content extracted",
+                        "document_id": doc_id
+                    }
+                
+                # Validate document
+                validation = validate_document_type(
+                    latest_version.get("filename", ""),
+                    extracted_text
+                )
+                
+                # Only process if valid and has relevant keywords
+                if not validation.should_process:
+                    # Mark as processed but not enriched
+                    await db.documents.update_one(
+                        {"id": doc_id},
+                        {"$set": {"metadata_extracted": True}}
+                    )
+                    return {
+                        "status": "skipped",
+                        "reason": "No relevant keywords found",
+                        "document_id": doc_id,
+                        "validation": validation.dict()
+                    }
+                
+                # Create enriched metadata
+                enriched_metadata = DocumentMetadataEnriched(
+                    document_id=doc_id,
+                    document_type=validation.document_type,
+                    extracted_keywords=validation.extracted_keywords,
+                    validation_status="validated",
+                    validation_reason="Keywords matched",
+                    processed_at=datetime.now(timezone.utc).isoformat(),
+                    processing_duration_ms=int((time.time() - start_time) * 1000),
+                    version=1
+                )
+                logger.info("Document Type:" + validation.document_type)
+                # Extract specific metadata based on document type
+                if validation.document_type == "financial_report":
+                    financial_meta = extract_financial_metadata(
+                        extracted_text,
+                        latest_version.get("filename", "")
+                    )
+                    enriched_metadata.financial_metadata = financial_meta
+                    
+                    # Add financial tags
+                    tags_to_add = ["financial", "report", "finance"]
+                    if financial_meta and financial_meta.report_type:
+                        tags_to_add.append(financial_meta.report_type)
+                    
+                    await db.documents.update_one(
+                        {"id": doc_id},
+                        {"$addToSet": {"tags": {"$each": tags_to_add}}}
+                    )
+                    
+                elif validation.document_type == "meeting":
+                    meeting_meta = extract_meeting_metadata(
+                        extracted_text,
+                        latest_version.get("filename", "")
+                    )
+                    enriched_metadata.meeting_metadata = meeting_meta
+                    
+                    # Add meeting tags
+                    tags_to_add = ["meeting"]
+                    if meeting_meta and meeting_meta.meeting_type:
+                        tags_to_add.append(meeting_meta.meeting_type)
+                    await db.documents.update_one(
+                        {"id": doc_id},
+                        {"$addToSet": {"tags": {"$each": tags_to_add}}}
+                    )
+                
+                # Store enriched metadata
+                await db.document_metadata_enriched.insert_one(
+                    enriched_metadata.model_dump()
+                )
+                
+                # Update document status
+                await db.documents.update_one(
+                    {"id": doc_id},
+                    {
+                        "$set": {
+                            "metadata_extracted": True,
+                            "metadata_extracted_at": datetime.now(timezone.utc).isoformat(),
+                            "document_type": validation.document_type,
+                            "last_processed": datetime.now(timezone.utc).isoformat()
+                        }
+                    }
+                )
+                
+                processing_time = int((time.time() - start_time) * 1000)
+                
+                return {
+                    "status": "success",
+                    "document_id": doc_id,
+                    "document_type": validation.document_type,
+                    "processing_time_ms": processing_time,
+                    "keywords_found": len(validation.extracted_keywords),
+                    "confidence_score": validation.confidence_score
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing document {doc_id}: {e}")
+                return {
+                    "status": "failed",
+                    "reason": str(e),
+                    "document_id": doc_id
+                }
+            
+        except Exception as e:
+            logger.error(f"Document processing error: {e}")
+            return {"status": "error", "error": str(e)}
+    
+    async def process_batch(self, documents, batch_job_id=None):
+        """Process a batch of documents in parallel"""
+        if not documents:
+            return {"processed": 0, "successful": 0, "failed": 0}
+        
+        logger.info(f"Processing batch of {len(documents)} documents...")
+        
+        results = []
+        successful = 0
+        skipped = 0
+        failed = 0
+        financial_reports = 0
+        meeting_docs = 0
+        
+        start_time = time.time()
+        
+        # Process documents with limited concurrency
+        semaphore = asyncio.Semaphore(self.max_concurrent)
+        
+        async def process_with_limit(document):
+            async with semaphore:
+                return await self.process_document(document)
+        
+        # Create tasks for all documents
+        tasks = [process_with_limit(doc) for doc in documents[:self.batch_size]]
+        
+        # Process results as they complete
+        for task in asyncio.as_completed(tasks):
+            try:
+                result = await asyncio.wait_for(task, timeout=300)  # 5 minute timeout
+                results.append(result)
+                
+                if result.get("status") == "success":
+                    successful += 1
+                    if result.get("document_type") == "financial_report":
+                        financial_reports += 1
+                    elif result.get("document_type") == "meeting":
+                        meeting_docs += 1
+                elif result.get("status") == "skipped":
+                    skipped += 1
+                else:
+                    failed += 1
+                
+                # Update batch job progress
+                if batch_job_id:
+                    await db.batch_jobs.update_one(
+                        {"id": batch_job_id},
+                        {
+                            "$inc": {
+                                "processed_documents": 1,
+                                "successful": 1 if result.get("status") == "success" else 0,
+                                "skipped": 1 if result.get("status") == "skipped" else 0,
+                                "failed": 1 if result.get("status") == "failed" else 0
+                            }
+                        }
+                    )
+                
+                # Log progress every 100 documents
+                processed = successful + skipped + failed
+                if processed % 100 == 0:
+                    elapsed = time.time() - start_time
+                    docs_per_min = (processed / elapsed) * 60 if elapsed > 0 else 0
+                    logger.info(f"Progress: {processed}/{len(documents)} | Speed: {docs_per_min:.1f} docs/min")
+                    
+            except Exception as e:
+                logger.error(f"Task failed: {e}")
+                failed += 1
+                results.append({"status": "failed", "error": str(e)})
+        
+        # Calculate performance
+        total_time = time.time() - start_time
+        docs_per_min = (len(documents) / total_time) * 60 if total_time > 0 else 0
+        
+        logger.info(f"Batch complete: {successful} successful, {skipped} skipped, {failed} failed")
+        logger.info(f"Financial reports: {financial_reports}, Meeting docs: {meeting_docs}")
+        logger.info(f"Processing speed: {docs_per_min:.1f} documents/minute")
+        logger.info(f"Total time: {total_time:.2f} seconds")
+        
+        # Update statistics
+        self.stats['total_processed'] += len(documents)
+        self.stats['total_validated'] += successful
+        self.stats['total_rejected'] += skipped
+        self.stats['financial_reports'] += financial_reports
+        self.stats['meeting_docs'] += meeting_docs
+        self.stats['other_docs'] += (successful - financial_reports - meeting_docs)
+        self.stats['current_speed_docs_per_min'] = docs_per_min
+        
+        # Update batch job if exists
+        if batch_job_id:
+            await db.batch_jobs.update_one(
+                {"id": batch_job_id},
+                {
+                    "$set": {
+                        "status": "completed",
+                        "end_time": datetime.now(timezone.utc).isoformat(),
+                        "duration_seconds": total_time
+                    }
+                }
+            )
+        
+        return {
+            "total": len(documents),
+            "successful": successful,
+            "skipped": skipped,
+            "failed": failed,
+            "financial_reports": financial_reports,
+            "meeting_docs": meeting_docs,
+            "processing_speed_docs_per_min": docs_per_min,
+            "total_time_seconds": total_time
+        }
+    
+    async def run_processing_cycle(self, limit=100000):
+        """Run one complete processing cycle"""
+        try:
+            logger.info("=== Starting document processing cycle ===")
+            
+            # Create batch job record
+            batch_job_id = str(uuid.uuid4())
+            batch_job = {
+                "id": batch_job_id,
+                "name": f"Auto-process-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                "description": f"Automatic metadata extraction for up to {limit} documents",
+                "status": "running",
+                "total_documents": 0,
+                "processed_documents": 0,
+                "successful": 0,
+                "skipped": 0,
+                "failed": 0,
+                "start_time": datetime.now(timezone.utc).isoformat(),
+                "created_by": "system",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "parameters": {
+                    "limit": limit,
+                    "max_concurrent": self.max_concurrent,
+                    "batch_size": self.batch_size
+                }
+            }
+            await db.batch_jobs.insert_one(batch_job)
+            
+            # Get documents to process
+            documents = await self.scan_unprocessed_documents(limit=limit)
+            
+            if not documents:
+                logger.info("No documents need processing")
+                await db.batch_jobs.update_one(
+                    {"id": batch_job_id},
+                    {"$set": {"status": "completed", "end_time": datetime.now(timezone.utc).isoformat()}}
+                )
+                return {"message": "No documents to process"}
+            
+            total_documents = len(documents)
+            logger.info(f"Will process {total_documents} documents")
+            
+            # Update batch job with total count
+            await db.batch_jobs.update_one(
+                {"id": batch_job_id},
+                {"$set": {"total_documents": total_documents}}
+            )
+            
+            # Process in chunks
+            chunk_size = self.batch_size
+            all_results = []
+            
+            for i in range(0, total_documents, chunk_size):
+                chunk = documents[i:i + chunk_size]
+                logger.info(f"Processing chunk {i//chunk_size + 1}/{(total_documents + chunk_size - 1)//chunk_size}")
+                
+                chunk_results = await self.process_batch(chunk, batch_job_id)
+                all_results.append(chunk_results)
+                
+                # Small pause between chunks
+                if i + chunk_size < total_documents:
+                    await asyncio.sleep(1)
+            
+            # Calculate totals
+            total_successful = sum(r.get("successful", 0) for r in all_results)
+            total_skipped = sum(r.get("skipped", 0) for r in all_results)
+            total_failed = sum(r.get("failed", 0) for r in all_results)
+            
+            logger.info(f"=== Processing Cycle Complete ===")
+            logger.info(f"Total documents: {total_documents}")
+            logger.info(f"Successfully processed: {total_successful}")
+            logger.info(f"Skipped (no keywords): {total_skipped}")
+            logger.info(f"Failed: {total_failed}")
+            
+            self.stats['last_run_time'] = datetime.now(timezone.utc).isoformat()
+            
+            return {
+                "batch_job_id": batch_job_id,
+                "total_documents": total_documents,
+                "successful": total_successful,
+                "skipped": total_skipped,
+                "failed": total_failed
+            }
+            
+        except Exception as e:
+            logger.error(f"Processing cycle error: {e}")
+            return {"error": str(e)}
+    
+    async def start_async_worker(self):
+        """Start the async background worker (call this from main event loop)"""
+        self.is_running = True
+        logger.info(f"Background document processor started with {self.max_concurrent} concurrent workers")
+        
+        while self.is_running:
+            try:
+                await self.run_processing_cycle(limit=100000)
+                
+                logger.info("Waiting 10 minutes before next processing cycle...")
+                # Wait 10 minutes using async sleep
+                for _ in range(600):  # 600 seconds = 10 minutes
+                    if not self.is_running:
+                        break
+                    await asyncio.sleep(1)
+                    
+            except Exception as e:
+                logger.error(f"Background worker error: {e}")
+                await asyncio.sleep(60)  # Wait 1 minute on error
+        
+        logger.info("Background document processor stopped")
+    
+    def get_stats(self):
+        """Get processor statistics"""
+        stats = self.stats.copy()
+        stats['is_running'] = self.is_running
+        stats['max_concurrent'] = self.max_concurrent
+        stats['batch_size'] = self.batch_size
+        
+        # Add system info
+        stats['system'] = {
+            'cpu_percent': psutil.cpu_percent(interval=1),
+            'memory_percent': psutil.virtual_memory().percent,
+            'thread_count': threading.active_count()
+        }
+        
+        # Calculate target metrics
+        target_docs_per_10min = 100000
+        current_capacity = stats['current_speed_docs_per_min'] * 10
+        
+        stats['performance'] = {
+            'target_documents_per_10min': target_docs_per_10min,
+            'current_capacity_per_10min': current_capacity,
+            'meeting_target': current_capacity >= target_docs_per_10min,
+            'efficiency_percentage': min(100, (current_capacity / target_docs_per_10min) * 100) if target_docs_per_10min > 0 else 0
+        }
+        
+        return stats
+# ==================== CREATE PROCESSOR INSTANCE ====================
+
+# Optimize for 100,000 documents per 10 minutes
+# With 50 workers, each needs to process 2000 docs/10min = 3.33 docs/second
+processor = DocumentBatchProcessor(
+    max_concurrent=10,  # Reduced for stability
+    batch_size=500
+)
+
+# ==================== NEW API ENDPOINTS ====================
+
+def require_permission(permission: str):
+    async def permission_checker(user: Dict = Depends(get_current_user)):
+        if not has_permission(user, permission):
+            raise HTTPException(status_code=403, detail=f"Permission denied: {permission}")
+        return user
+    return permission_checker
+def has_permission(user: Dict, permission: str) -> bool:
+    user_roles = user.get("roles", [])
+    for role_name in user_roles:
+        if role_name == "admin":
+            return True
+    return permission in get_user_permissions(user)
+
+def get_user_permissions(user: Dict) -> List[str]:
+    # This would normally query roles from DB, simplified for MVP
+    role_permissions = {
+        "admin": ["*"],
+        "records_manager": ["documents:read", "documents:write", "records:manage", "retention:manage"],
+        "auditor": ["documents:read", "audit:read"],
+        "user": ["documents:read", "documents:write"]
+    }
+    permissions = set()
+    for role in user.get("roles", []):
+        perms = role_permissions.get(role, [])
+        if "*" in perms:
+            return ["*"]
+        permissions.update(perms)
+    return list(permissions)
+
+def require_permission(permission: str):
+    async def permission_checker(user: Dict = Depends(get_current_user)):
+        if not has_permission(user, permission):
+            raise HTTPException(status_code=403, detail=f"Permission denied: {permission}")
+        return user
+    return permission_checker
+
+@api_router.post("/documents/validate-and-process", response_model=DocumentResponse)
+async def validate_and_process_document(
+    title: str = Form(...),
+    description: str = Form(""),
+    visibility: str = Form("PRIVATE"),
+    group_id: Optional[str] = Form(None),
+    tags: str = Form(""),
+    file: UploadFile = File(...),
+    user: Dict = Depends(require_permission("documents:write"))
+):
+    """Upload document with validation and automatic metadata extraction"""
+    # First upload the document normally
+    doc_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    
+    # Check file extension
+    file_ext = Path(file.filename).suffix.lower()
+    if file_ext not in VALID_FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid file type. Allowed: {', '.join(VALID_FILE_EXTENSIONS)}")
+    
+    # Save file
+    file_content = await file.read()
+    storage_filename = f"{doc_id}_v1{file_ext}"
+    storage_path = UPLOAD_DIR / storage_filename
+    
+    async with aiofiles.open(storage_path, 'wb') as f:
+        await f.write(file_content)
+    
+    # Extract text
+    extracted_text = extract_text(file_content, file.content_type, file.filename)
+    
+    tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
+    
+    version = {
+        "version_number": 1,
+        "filename": file.filename,
+        "file_size": len(file_content),
+        "content_type": file.content_type,
+        "storage_path": str(storage_path),
+        "extracted_text": extracted_text,
+        "uploaded_at": now,
+        "uploaded_by": user["id"]
+    }
+    
+    document = {
+        "id": doc_id,
+        "title": title,
+        "description": description,
+        "visibility": visibility,
+        "group_id": group_id,
+        "tags": tags_list,
+        "owner_id": user["id"],
+        "current_version": 1,
+        "versions": [version],
+        "is_record": False,
+        "record_declared_at": None,
+        "retention_schedule_id": None,
+        "legal_hold": False,
+        "legal_hold_reason": None,
+        "checked_out": False,
+        "checked_out_by": None,
+        "checked_out_by_name": None,
+        "checked_out_at": None,
+        "view_count": 0,
+        "last_viewed_at": None,
+        "last_viewed_by": None,
+        "metadata_extracted": False,
+        "document_type": "unknown",
+        "deleted": False,
+        "created_at": now,
+        "updated_at": now
+    }
+    
+    await db.documents.insert_one(document)
+    
+    # Create search index
+    await db.document_search.insert_one({
+        "document_id": doc_id,
+        "title": title,
+        "description": description,
+        "tags": tags_list,
+        "extracted_text": extracted_text,
+        "visibility": visibility,
+        "group_id": group_id,
+        "owner_id": user["id"]
+    })
+    
+    # Validate document
+    validation = validate_document_type(file.filename, extracted_text)
+    
+    # Store validation result
+    validation_doc = {
+        "document_id": doc_id,
+        "validation": validation.dict(),
+        "validated_at": now,
+        "validated_by": user["id"]
+    }
+    await db.document_validations.insert_one(validation_doc)
+    
+    # If valid, process immediately
+    if validation.should_process:
+        # Process in background
+        async def process_async():
+            try:
+                result = processor.process_document_thread(document)
+                logger.info(f"Document {doc_id} processed: {result}")
+            except Exception as e:
+                logger.error(f"Error processing document {doc_id}: {e}")
+        
+        asyncio.create_task(process_async())
+    
+    await create_audit_event(
+        actor=user,
+        action="DOCUMENT_VALIDATED_AND_UPLOADED",
+        resource_type="document",
+        resource_id=doc_id,
+        permission_used="documents:write",
+        after_state={"validation_result": validation.dict()}
+    )
+    
+    # Return document with validation info
+    response = DocumentResponse(**document)
+    response_dict = response.model_dump()
+    response_dict["validation"] = validation.dict()
+    response_dict["should_process"] = validation.should_process
+    
+    return response_dict
+
+@api_router.post("/batch/start", response_model=BatchJob)
+async def start_batch_processing(
+    background_tasks: BackgroundTasks,
+    limit: int = Query(100000, ge=1, le=1000000),
+    user: Dict = Depends(require_permission("admin"))
+):
+    """Start a batch processing job"""
+    # Create batch job record
+    batch_job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    
+    batch_job = {
+        "id": batch_job_id,
+        "name": f"Manual-batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+        "description": f"Manual batch processing for up to {limit} documents",
+        "status": "pending",
+        "total_documents": 0,
+        "processed_documents": 0,
+        "successful": 0,
+        "skipped": 0,
+        "failed": 0,
+        "created_by": user["id"],
+        "created_at": now,
+        "parameters": {
+            "limit": limit,
+            "max_workers": processor.max_workers,
+            "batch_size": processor.batch_size
+        }
+    }
+    await db.batch_jobs.insert_one(batch_job)
+    
+    # Start processing in background
+    async def process_task():
+        try:
+            await processor.run_processing_cycle(limit=limit)
+        except Exception as e:
+            logger.error(f"Batch processing failed: {e}")
+            await db.batch_jobs.update_one(
+                {"id": batch_job_id},
+                {"$set": {"status": "failed", "end_time": datetime.now(timezone.utc).isoformat()}}
+            )
+    
+    background_tasks.add_task(process_task)
+    
+    await create_audit_event(
+        actor=user,
+        action="BATCH_PROCESSING_STARTED",
+        resource_type="batch_job",
+        resource_id=batch_job_id,
+        permission_used="admin",
+        after_state={"limit": limit}
+    )
+    
+    return BatchJob(**batch_job)
+
+@api_router.get("/batch/jobs", response_model=List[BatchJob])
+async def list_batch_jobs(
+    status: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: Dict = Depends(require_permission("admin"))
+):
+    """List batch processing jobs"""
+    query = {}
+    if status:
+        query["status"] = status
+    
+    skip = (page - 1) * page_size
+    jobs = await db.batch_jobs.find(query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    
+    return [BatchJob(**job) for job in jobs]
+
+@api_router.get("/batch/jobs/{job_id}", response_model=BatchJob)
+async def get_batch_job(job_id: str, user: Dict = Depends(require_permission("admin"))):
+    """Get batch job details"""
+    job = await db.batch_jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Batch job not found")
+    return BatchJob(**job)
+
+@api_router.post("/processor/start")
+async def start_processor(
+    max_workers: int = Query(50, ge=1, le=200),
+    user: Dict = Depends(require_permission("admin"))
+):
+    """Start the background processor"""
+    if processor.is_running:
+        raise HTTPException(status_code=400, detail="Processor is already running")
+    
+    processor.max_workers = max_workers
+    processor.start_background_worker()
+    
+    await create_audit_event(
+        actor=user,
+        action="BACKGROUND_PROCESSOR_STARTED",
+        resource_type="processor",
+        resource_id="system",
+        permission_used="admin",
+        after_state={"max_workers": max_workers}
+    )
+    
+    return {
+        "message": "Background processor started",
+        "max_workers": max_workers,
+        "target_capacity": "100,000 documents per 10 minutes"
+    }
+
+@api_router.post("/processor/stop")
+async def stop_processor(user: Dict = Depends(require_permission("admin"))):
+    """Stop the background processor"""
+    if not processor.is_running:
+        raise HTTPException(status_code=400, detail="Processor is not running")
+    
+    processor.stop_background_worker()
+    
+    await create_audit_event(
+        actor=user,
+        action="BACKGROUND_PROCESSOR_STOPPED",
+        resource_type="processor",
+        resource_id="system",
+        permission_used="admin"
+    )
+    
+    return {"message": "Background processor stopped"}
+
+@api_router.get("/processor/stats")
+async def get_processor_stats(user: Dict = Depends(get_current_user)):
+    """Get processor statistics"""
+    return processor.get_stats()
+
+@api_router.get("/search/financial-reports")
+async def search_financial_reports(
+    report_type: Optional[str] = Query(None),
+    period: Optional[str] = Query(None),
+    year: Optional[int] = Query(None, ge=2000, le=2100),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Search financial reports"""
+    # Build query for financial reports
+    pipeline = [
+        {
+            "$match": {
+                "document_type": "financial_report",
+                "validation_status": "validated"
+            }
+        }
+    ]
+    
+    # Add filters
+    match_stage = {}
+    if report_type:
+        match_stage["financial_metadata.report_type"] = report_type
+    if period:
+        match_stage["financial_metadata.period"] = {"$regex": period, "$options": "i"}
+    if year:
+        match_stage["financial_metadata.fiscal_year"] = year
+    
+    if match_stage:
+        pipeline.append({"$match": match_stage})
+    
+    # Get document IDs
+    pipeline.extend([
+        {"$project": {"document_id": 1, "_id": 0}},
+        {"$skip": (page - 1) * page_size},
+        {"$limit": page_size}
+    ])
+    
+    metadata_docs = await db.document_metadata_enriched.aggregate(pipeline).to_list(page_size)
+    doc_ids = [md["document_id"] for md in metadata_docs]
+    
+    if not doc_ids:
+        return {
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "results": []
+        }
+    
+    # Get documents with RBAC
+    query = {
+        "id": {"$in": doc_ids},
+        "deleted": False
+    }
+    
+    # RBAC filter
+    user_groups = user.get("groups", [])
+    if "admin" not in user.get("roles", []):
+        query["$or"] = [
+            {"owner_id": user["id"]},
+            {"visibility": "ORG"},
+            {"$and": [{"visibility": "GROUP"}, {"group_id": {"$in": user_groups}}]}
+        ]
+    
+    documents = await db.documents.find(query, {"_id": 0}).to_list(page_size)
+    
+    # Get enriched metadata for each document
+    results = []
+    for doc in documents:
+        metadata = await db.document_metadata_enriched.find_one(
+            {"document_id": doc["id"]},
+            {"_id": 0}
+        )
+        doc_dict = DocumentResponse(**doc).model_dump()
+        if metadata:
+            doc_dict["enriched_metadata"] = metadata
+        results.append(doc_dict)
+    
+    # Get total count
+    count_pipeline = [
+        {
+            "$match": {
+                "document_type": "financial_report",
+                "validation_status": "validated"
+            }
+        },
+        {"$count": "total"}
+    ]
+    
+    if match_stage:
+        count_pipeline.insert(1, {"$match": match_stage})
+    
+    count_result = await db.document_metadata_enriched.aggregate(count_pipeline).to_list(1)
+    total = count_result[0]["total"] if count_result else 0
+    
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "results": results
+    }
+
+@api_router.get("/search/meetings")
+async def search_meetings(
+    meeting_type: Optional[str] = Query(None),
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    organizer: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Search meeting documents"""
+    # Build query for meetings
+    pipeline = [
+        {
+            "$match": {
+                "document_type": "meeting",
+                "validation_status": "validated"
+            }
+        }
+    ]
+    
+    # Add filters
+    match_stage = {}
+    if meeting_type:
+        match_stage["meeting_metadata.meeting_type"] = meeting_type
+    if organizer:
+        match_stage["meeting_metadata.organizer"] = {"$regex": organizer, "$options": "i"}
+    if date_from or date_to:
+        date_filter = {}
+        if date_from:
+            date_filter["$gte"] = date_from
+        if date_to:
+            date_filter["$lte"] = date_to
+        match_stage["meeting_metadata.date"] = date_filter
+    
+    if match_stage:
+        pipeline.append({"$match": match_stage})
+    
+    # Get document IDs
+    pipeline.extend([
+        {"$project": {"document_id": 1, "_id": 0}},
+        {"$skip": (page - 1) * page_size},
+        {"$limit": page_size}
+    ])
+    
+    metadata_docs = await db.document_metadata_enriched.aggregate(pipeline).to_list(page_size)
+    doc_ids = [md["document_id"] for md in metadata_docs]
+    
+    if not doc_ids:
+        return {
+            "total": 0,
+            "page": page,
+            "page_size": page_size,
+            "results": []
+        }
+    
+    # Get documents with RBAC
+    query = {
+        "id": {"$in": doc_ids},
+        "deleted": False
+    }
+    
+    # RBAC filter
+    user_groups = user.get("groups", [])
+    if "admin" not in user.get("roles", []):
+        query["$or"] = [
+            {"owner_id": user["id"]},
+            {"visibility": "ORG"},
+            {"$and": [{"visibility": "GROUP"}, {"group_id": {"$in": user_groups}}]}
+        ]
+    
+    documents = await db.documents.find(query, {"_id": 0}).to_list(page_size)
+    
+    # Get enriched metadata for each document
+    results = []
+    for doc in documents:
+        metadata = await db.document_metadata_enriched.find_one(
+            {"document_id": doc["id"]},
+            {"_id": 0}
+        )
+        doc_dict = DocumentResponse(**doc).model_dump()
+        if metadata:
+            doc_dict["enriched_metadata"] = metadata
+        results.append(doc_dict)
+    
+    # Get total count
+    count_pipeline = [
+        {
+            "$match": {
+                "document_type": "meeting",
+                "validation_status": "validated"
+            }
+        },
+        {"$count": "total"}
+    ]
+    
+    if match_stage:
+        count_pipeline.insert(1, {"$match": match_stage})
+    
+    count_result = await db.document_metadata_enriched.aggregate(count_pipeline).to_list(1)
+    total = count_result[0]["total"] if count_result else 0
+    
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "results": results
+    }
+
+@api_router.get("/documents/{doc_id}/metadata/enriched")
+async def get_enriched_metadata(doc_id: str, user: Dict = Depends(require_permission("documents:read"))):
+    """Get enriched metadata for a document"""
+    # Check document access
+    document = await db.documents.find_one({"id": doc_id, "deleted": False}, {"_id": 0})
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not can_access_document(user, document):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get enriched metadata
+    metadata = await db.document_metadata_enriched.find_one({"document_id": doc_id}, {"_id": 0})
+    if not metadata:
+        raise HTTPException(status_code=404, detail="No enriched metadata found")
+    
+    # Get validation result
+    validation = await db.document_validations.find_one(
+        {"document_id": doc_id},
+        {"_id": 0, "validation": 1}
+    )
+    
+    response = {
+        "document": DocumentResponse(**document),
+        "enriched_metadata": metadata,
+        "validation": validation.get("validation") if validation else None
+    }
+    
+    return response
+
+# ==================== ENHANCED STARTUP ====================
+
+@app.on_event("startup")
+async def startup_event():
+    # Create text indexes
+    await db.document_search.create_index([
+        ("title", "text"),
+        ("description", "text"),
+        ("extracted_text", "text"),
+        ("tags", "text")
+    ])
+    
+    # Create indexes for new collections
+    await db.document_metadata_enriched.create_index([("document_id", 1)], unique=True)
+    await db.document_metadata_enriched.create_index([("document_type", 1)])
+    await db.document_metadata_enriched.create_index([("validation_status", 1)])
+    await db.document_metadata_enriched.create_index([("financial_metadata.report_type", 1)])
+    await db.document_metadata_enriched.create_index([("financial_metadata.fiscal_year", 1)])
+    await db.document_metadata_enriched.create_index([("meeting_metadata.meeting_type", 1)])
+    await db.document_metadata_enriched.create_index([("meeting_metadata.date", 1)])
+    
+    await db.document_validations.create_index([("document_id", 1)], unique=True)
+    await db.document_validations.create_index([("validation.is_valid", 1)])
+    
+    await db.batch_jobs.create_index([("status", 1)])
+    await db.batch_jobs.create_index([("created_at", -1)])
+    await db.batch_jobs.create_index([("created_by", 1)])
+    
+    await db.documents.create_index([("metadata_extracted", 1)])
+    await db.documents.create_index([("document_type", 1)])
+    await db.documents.create_index([("created_at", -1)])
+    
+    # Seed default roles...
+    roles = [
+        {"id": "role-admin", "name": "admin", "description": "Full system access", "permissions": ["*"], "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": "role-records-manager", "name": "records_manager", "description": "Manage records and retention", "permissions": ["documents:read", "documents:write", "records:manage", "retention:manage"], "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": "role-auditor", "name": "auditor", "description": "View audit logs", "permissions": ["documents:read", "audit:read"], "created_at": datetime.now(timezone.utc).isoformat()},
+        {"id": "role-user", "name": "user", "description": "Standard user", "permissions": ["documents:read", "documents:write"], "created_at": datetime.now(timezone.utc).isoformat()}
+    ]
+    for role in roles:
+        existing = await db.roles.find_one({"name": role["name"]})
+        if not existing:
+            await db.roles.insert_one(role)
+    
+    # Seed admin user
+    admin_email = "admin@paperless.com"
+    existing_admin = await db.users.find_one({"email": admin_email})
+    if not existing_admin:
+        admin_password = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+        admin_user = {
+            "id": str(uuid.uuid4()),
+            "email": admin_email,
+            "full_name": "System Administrator",
+            "password_hash": admin_password,
+            "is_active": True,
+            "roles": ["admin"],
+            "groups": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.users.insert_one(admin_user)
+        logger.info(f"Created admin user: {admin_email} / admin123")
+    
+    # Start background processor as async task
+    AUTO_START_PROCESSOR = os.environ.get('AUTO_START_BACKGROUND_PROCESSOR', 'false').lower() == 'true'
+    
+    if AUTO_START_PROCESSOR:
+        logger.info("Starting background processor as async task...")
+        # Start processor as background task
+        asyncio.create_task(processor.start_async_worker())
+        logger.info("Background processor started with async task")
+    
+    logger.info("Enhanced DMS startup complete with financial/meeting metadata extraction")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean shutdown"""
+    if processor.is_running:
+        logger.info("Stopping background processor...")
+        processor.stop_background_worker()
+    client.close()
+
+# Include the router in the main app
+app.include_router(api_router)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_credentials=True,
+    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+
+
 
 # ==================== AUTH ROUTES ====================
 
