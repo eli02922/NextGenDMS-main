@@ -7,6 +7,7 @@ import { Label } from "../components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { FileText, Lock } from "lucide-react";
+import fileIcon from "@/assets/logo.png";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -58,8 +59,14 @@ export default function LoginPage() {
         <div className="absolute inset-0 bg-white/50" />
         <div className="relative z-10 flex flex-col justify-end p-12">
           <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-primary rounded flex items-center justify-center">
-              <FileText className="w-6 h-6 text-primary-foreground" />
+                       <div className="w-10 h-10 rounded flex items-center justify-center">
+  <img
+    src={fileIcon}
+    width={300}
+    height={300}
+    alt="File icon"
+    className=""
+  />
             </div>
             <span className="text-2xl font-heading font-bold text-primary">NextGen DMS</span>
           </div>
@@ -76,8 +83,14 @@ export default function LoginPage() {
       <div className="flex-1 flex items-center justify-center p-8 bg-background">
         <div className="w-full max-w-md animate-fade-in">
           <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 bg-primary rounded flex items-center justify-center">
-              <FileText className="w-6 h-6 text-primary-foreground" />
+            <div className="w-10 h-10 rounded flex items-center justify-center">
+  <img
+    src={fileIcon}
+    width={300}
+    height={300}
+    alt="File icon"
+    className=""
+  />
             </div>
             <span className="text-2xl font-heading font-bold">NextGen DMS</span>
           </div>

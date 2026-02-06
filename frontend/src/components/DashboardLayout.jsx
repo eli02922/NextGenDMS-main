@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "../lib/utils";
-
+import fileIcon from "@/assets/logo.png";
 const navItems = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, permission: null },
   { path: "/documents", label: "Documents", icon: FileText, permission: "documents:read" },
@@ -72,8 +72,14 @@ export default function DashboardLayout({ children }) {
             {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
           </Button>
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-primary rounded flex items-center justify-center">
-              <FileText className="w-4 h-4 text-primary-foreground" />
+            <div className="w-10 h-10 rounded flex items-center justify-center">
+  <img
+    src={fileIcon}
+    width={300}
+    height={300}
+    alt="File icon"
+    className=""
+  />
             </div>
             <span className="font-heading font-bold">NextGen DMS</span>
           </div>
@@ -122,9 +128,15 @@ export default function DashboardLayout({ children }) {
           {/* Logo */}
           <div className="h-16 flex items-center px-6 border-b">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 bg-primary rounded flex items-center justify-center">
-                <FileText className="w-5 h-5 text-primary-foreground" />
-              </div>
+          <div className="w-10 h-10 rounded flex items-center justify-center">
+  <img
+    src={fileIcon}
+    width={300}
+    height={300}
+    alt="File icon"
+    className=""
+  />
+            </div>
               <div>
                 <span className="text-lg font-heading font-bold">NextGen</span>
                 <p className="text-[10px] text-muted-foreground uppercase tracking-wider">DMS</p>
