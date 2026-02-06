@@ -1,3 +1,4 @@
+import cohere
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query, BackgroundTasks, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
@@ -110,6 +111,441 @@ MEETING_KEYWORDS = {
     "steering": ["steering committee", "board meeting", "executive", "directors", "management"]
 }
 
+# ==================== SUMMARIZATION MODELS ====================
+
+class SummarizeRequest(BaseModel):
+    """Request model for document summarization"""
+    method: str = Field("extractive", description="extractive, abstractive, bullet_points, executive")
+    max_length: int = Field(500, ge=50, le=2000)
+    temperature: float = Field(0.3, ge=0.1, le=1.0)
+    additional_instructions: Optional[str] = None
+
+class SummaryResponse(BaseModel):
+    """Response model for document summary"""
+    model_config = ConfigDict(extra="ignore")
+    summary: str
+    metadata: Dict[str, Any]
+    analysis: Optional[Dict[str, Any]] = None
+
+class DocumentSummary(BaseModel):
+    """Model for storing document summaries"""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    document_id: str
+    summary_type: str  # extractive, abstractive, bullet_points, executive
+    content: str
+    word_count: int
+    reading_time_minutes: float
+    model_used: Optional[str] = None
+    temperature: float
+    max_tokens: int
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    created_by: str
+
+class SummaryMetadata(BaseModel):
+    """Metadata for summary generation"""
+    model_config = ConfigDict(extra="ignore")
+    summary_type: str
+    word_count: int
+    reading_time_minutes: float
+    original_word_count: int
+    compression_ratio: float
+    summary_id: Optional[str] = None
+    created_at: Optional[str] = None
+
+class DocumentAnalysis(BaseModel):
+    """Analysis results from document"""
+    model_config = ConfigDict(extra="ignore")
+    topics: List[str]
+    document_type: Optional[str] = None
+    sentiment: Optional[str] = None
+    word_count: int
+    estimated_reading_time: float
+    key_entities: Optional[List[str]] = None
+    
+# ==================== SUMMARIZATION SERVICE ====================
+
+class DocumentSummarizer:
+    """Service for summarizing documents using Cohere AI"""
+    
+    def __init__(self, cohere_api_key: str):
+        if not cohere_api_key:
+            raise ValueError("COHERE_API_KEY is required for summarization")
+        self.co = cohere.Client(cohere_api_key)
+        self.enabled = os.environ.get('ENABLE_COHERE_SUMMARIZATION', 'true').lower() == 'true'
+        
+    async def summarize_document(self, document_id: str, document_text: str, method: str = "extractive",
+                               max_length: int = 500, temperature: float = 0.3, 
+                               additional_instructions: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Summarize document text using Cohere API
+        
+        Args:
+            document_id: ID of the document
+            document_text: Extracted text from document
+            method: Type of summary (extractive, abstractive, bullet_points, executive)
+            max_length: Maximum tokens for summary
+            temperature: Creativity/randomness (0.1-1.0)
+            additional_instructions: Custom instructions for summary
+        
+        Returns:
+            Dictionary with summary and metadata
+        """
+        if not self.enabled:
+            return self._generate_fallback_summary(document_id, document_text, method)
+        
+        # Clean and prepare text
+        cleaned_text = self._clean_text(document_text)
+        
+        if len(cleaned_text.split()) < 50:
+            raise ValueError("Text is too short to summarize (minimum 50 words)")
+        
+        # Truncate text if too long (Cohere has token limits)
+        max_input_tokens = 4000  # Cohere's limit for many models
+        words = cleaned_text.split()
+        if len(words) > max_input_tokens:
+            truncated_words = words[:max_input_tokens]
+            cleaned_text = " ".join(truncated_words)
+            logger.warning(f"Document text truncated from {len(words)} to {len(truncated_words)} words")
+        
+        try:
+            # Generate summary based on method
+            if method == "extractive":
+                summary = await self._generate_extractive_summary(cleaned_text, max_length, temperature)
+            elif method == "abstractive":
+                summary = await self._generate_abstractive_summary(cleaned_text, max_length, temperature, additional_instructions)
+            elif method == "bullet_points":
+                summary = await self._generate_bullet_points(cleaned_text, max_length, temperature)
+            elif method == "executive":
+                summary = await self._generate_executive_summary(cleaned_text, max_length, temperature, additional_instructions)
+            else:
+                raise ValueError(f"Invalid summary method: {method}")
+            
+            # Analyze document
+            analysis = await self._analyze_document(cleaned_text)
+            
+            # Calculate metrics
+            original_word_count = len(document_text.split())
+            summary_word_count = len(summary.split())
+            compression_ratio = summary_word_count / original_word_count if original_word_count > 0 else 0
+            reading_time = summary_word_count / 200  # 200 words per minute
+            
+            return {
+                "summary": summary,
+                "metadata": {
+                    "summary_type": method,
+                    "word_count": summary_word_count,
+                    "reading_time_minutes": reading_time,
+                    "original_word_count": original_word_count,
+                    "compression_ratio": round(compression_ratio, 3),
+                    "model_used": "cohere-command",
+                    "temperature": temperature,
+                    "max_length": max_length
+                },
+                "analysis": analysis
+            }
+            
+        except Exception as e:
+            logger.error(f"Cohere summarization failed: {e}")
+            # Fallback to simple summary
+            return self._generate_fallback_summary(document_id, document_text, method)
+    
+    async def _generate_extractive_summary(self, text: str, max_length: int, temperature: float) -> str:
+        """Generate extractive summary (key sentences)"""
+        prompt = f"""Extract the most important sentences from this text that capture the main ideas and key points.
+        Focus on factual information and key findings.
+        
+        Text:
+        {text[:3000]}  # Limit input
+        
+        Important Sentences:
+        """
+        
+        response = self.co.generate(
+            model=llm_model_name,
+            prompt=prompt,
+            max_tokens=max_length,
+            temperature=temperature,
+            k=0,
+            stop_sequences=[],
+            return_likelihoods='NONE'
+        )
+        
+        summary = response.generations[0].text.strip()
+        return self._clean_summary(summary)
+    
+    async def _generate_abstractive_summary(self, text: str, max_length: int, temperature: float, 
+                                          additional_instructions: Optional[str] = None) -> str:
+        """Generate abstractive summary (paraphrased)"""
+        instructions = additional_instructions or "Write a concise summary in your own words."
+        
+        prompt = f"""{instructions}
+        
+        Text to summarize:
+        {text[:3000]}
+        
+        Summary:
+        """
+        
+        response = self.co.generate(
+            model='command',
+            prompt=prompt,
+            max_tokens=max_length,
+            temperature=temperature,
+            k=0,
+            stop_sequences=[],
+            return_likelihoods='NONE'
+        )
+        
+        summary = response.generations[0].text.strip()
+        return self._clean_summary(summary)
+    
+    async def _generate_bullet_points(self, text: str, max_length: int, temperature: float) -> str:
+        """Generate summary as bullet points"""
+        prompt = f"""Create a bullet-point summary of the key points from this text.
+        Each bullet should be concise and cover a main idea.
+        
+        Text:
+        {text[:3000]}
+        
+        Key Points:
+        • """
+        
+        response = self.co.generate(
+            model='command',
+            prompt=prompt,
+            max_tokens=max_length,
+            temperature=temperature * 0.8,  # Lower temperature for more factual bullet points
+            k=0,
+            stop_sequences=[],
+            return_likelihoods='NONE'
+        )
+        
+        summary = "• " + response.generations[0].text.strip()
+        
+        # Ensure proper bullet formatting
+        lines = summary.split('\n')
+        formatted_lines = []
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith('•') and not line.startswith('-'):
+                line = f'• {line}'
+            formatted_lines.append(line)
+        
+        return '\n'.join(formatted_lines)
+    
+    async def _generate_executive_summary(self, text: str, max_length: int, temperature: float,
+                                        additional_instructions: Optional[str] = None) -> str:
+        """Generate executive summary with key findings and recommendations"""
+        instructions = additional_instructions or "Focus on key findings, conclusions, and recommendations for executives."
+        
+        prompt = f"""Write an executive summary of this text. {instructions}
+        
+        Text:
+        {text[:3000]}
+        
+        Executive Summary:
+        """
+        
+        response = self.co.generate(
+            model='command',
+            prompt=prompt,
+            max_tokens=max_length,
+            temperature=temperature,
+            k=0,
+            stop_sequences=[],
+            return_likelihoods='NONE'
+        )
+        
+        summary = response.generations[0].text.strip()
+        if not summary.lower().startswith('executive summary'):
+            summary = f"Executive Summary:\n{summary}"
+        
+        return self._clean_summary(summary)
+    
+    async def _analyze_document(self, text: str) -> Dict[str, Any]:
+        """Analyze document for topics, sentiment, and type"""
+        try:
+            # Extract key topics
+            topic_prompt = f"""Extract 3-5 main topics or themes from this text. Return as a JSON array of strings.
+            
+            Text: {text[:2000]}
+            
+            JSON:"""
+            
+            topic_response = self.co.chat(
+                model='command',
+                prompt=topic_prompt,
+                max_tokens=100,
+                temperature=0.2,
+                k=0
+            )
+            
+            topics_text = topic_response.generations[0].text.strip()
+            try:
+                topics = json.loads(topics_text)
+                if not isinstance(topics, list):
+                    topics = [topics]
+            except:
+                # Fallback parsing
+                topics = [t.strip().strip('"\'') for t in topics_text.strip('[]').split(',')]
+            
+            # Determine document type
+            type_prompt = f"""What type of document is this? Choose one: Report, Email, Article, Contract, Manual, Proposal, 
+            Research Paper, Financial Report, Meeting Minutes, Presentation, Other.
+            
+            Text: {text[:1500]}
+            
+            Type:"""
+            
+            type_response = self.co.generate(
+                model='command',
+                prompt=type_prompt,
+                max_tokens=20,
+                temperature=0.1,
+                k=0
+            )
+            
+            doc_type = type_response.generations[0].text.strip()
+            
+            # Sentiment analysis
+            sentiment_prompt = f"""What is the overall sentiment of this text? Choose one: Positive, Negative, Neutral, Mixed.
+            
+            Text: {text[:1500]}
+            
+            Sentiment:"""
+            
+            sentiment_response = self.co.generate(
+                model='command',
+                prompt=sentiment_prompt,
+                max_tokens=10,
+                temperature=0.1,
+                k=0
+            )
+            
+            sentiment = sentiment_response.generations[0].text.strip()
+            
+            # Word count and reading time
+            word_count = len(text.split())
+            reading_time = word_count / 200  # 200 words per minute
+            
+            return {
+                "topics": topics[:5] if topics else [],
+                "document_type": doc_type,
+                "sentiment": sentiment,
+                "word_count": word_count,
+                "estimated_reading_time": round(reading_time, 1)
+            }
+            
+        except Exception as e:
+            logger.error(f"Document analysis failed: {e}")
+            return {
+                "topics": [],
+                "document_type": "Unknown",
+                "sentiment": "Neutral",
+                "word_count": len(text.split()),
+                "estimated_reading_time": len(text.split()) / 200
+            }
+    
+    def _clean_text(self, text: str) -> str:
+        """Clean text before processing"""
+        if not text:
+            return ""
+        
+        # Remove excessive whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        # Remove special characters but keep basic punctuation
+        text = re.sub(r'[^\w\s.,!?()-]', '', text)
+        
+        # Remove multiple newlines
+        text = re.sub(r'\n\s*\n', '\n\n', text)
+        
+        return text.strip()
+    
+    def _clean_summary(self, summary: str) -> str:
+        """Clean up summary text"""
+        if not summary:
+            return ""
+        
+        # Remove excessive whitespace
+        summary = re.sub(r'\s+', ' ', summary)
+        
+        # Remove markdown formatting if present
+        summary = re.sub(r'#+\s*', '', summary)  # Headers
+        summary = re.sub(r'\*\*(.*?)\*\*', r'\1', summary)  # Bold
+        summary = re.sub(r'\*(.*?)\*', r'\1', summary)  # Italic
+        
+        return summary.strip()
+    
+    def _generate_fallback_summary(self, document_id: str, text: str, method: str) -> Dict[str, Any]:
+        """Generate a simple fallback summary when Cohere is unavailable"""
+        words = text.split()
+        word_count = len(words)
+        
+        if word_count < 100:
+            summary = text  # Too short to summarize
+        else:
+            # Simple extractive summary - take first, middle, and last sentences
+            sentences = re.split(r'[.!?]+', text)
+            if len(sentences) > 3:
+                summary = '. '.join([
+                    sentences[0].strip(),
+                    sentences[len(sentences)//2].strip(),
+                    sentences[-2].strip()
+                ]) + '.'
+            else:
+                summary = text[:500] + "..." if len(text) > 500 else text
+        
+        # Format based on method
+        if method == "bullet_points":
+            sentences = summary.split('. ')
+            summary = "\n".join([f"• {s.strip()}." for s in sentences if s.strip()])
+        elif method == "executive":
+            summary = f"Executive Summary:\n{summary}"
+        
+        return {
+            "summary": summary,
+            "metadata": {
+                "summary_type": method,
+                "word_count": len(summary.split()),
+                "reading_time_minutes": len(summary.split()) / 200,
+                "original_word_count": word_count,
+                "compression_ratio": round(len(summary.split()) / word_count, 3) if word_count > 0 else 0,
+                "model_used": "fallback",
+                "temperature": 0.0,
+                "max_length": 500
+            },
+            "analysis": {
+                "topics": ["General"],
+                "document_type": "Unknown",
+                "sentiment": "Neutral",
+                "word_count": word_count,
+                "estimated_reading_time": word_count / 200
+            }
+        }
+    
+    def estimate_reading_time(self, text: str, words_per_minute: int = 200) -> float:
+        """Estimate reading time in minutes"""
+        word_count = len(text.split())
+        return word_count / words_per_minute
+
+# ==================== CREATE SUMMARIZER INSTANCE ====================
+
+# Initialize Cohere summarizer
+cohere_api_key = os.environ.get('COHERE_API_KEY')
+llm_model_name = os.environ.get('MODEL_NAME')
+if cohere_api_key:
+    try:
+        summarizer = DocumentSummarizer(cohere_api_key)
+        logger.info("Cohere summarizer initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize Cohere summarizer: {e}")
+        summarizer = None
+else:
+    logger.warning("COHERE_API_KEY not set. Summarization will use fallback methods.")
+    summarizer = DocumentSummarizer("dummy_key")  # Will use fallback
+    
 # File extensions to process
 VALID_FILE_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt'}
 class BatchJob(BaseModel):
@@ -151,6 +587,7 @@ class FinancialReportMetadata(BaseModel):
     due_date: Optional[str] = None
     department: str = "Finance"
     confidentiality_level: str = "confidential"
+    
 class UserBase(BaseModel):
     email: EmailStr
     full_name: str
@@ -1561,6 +1998,384 @@ processor = DocumentBatchProcessor(
 
 # ==================== NEW API ENDPOINTS ====================
 
+# ==================== SUMMARIZATION ROUTES ====================
+
+@api_router.post("/documents/{document_id}/summarize", response_model=SummaryResponse)
+async def summarize_document(
+    document_id: str,
+    request: SummarizeRequest,
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Generate summary for a document using Cohere AI"""
+    try:
+        # Get document
+        document = await db.documents.find_one({"id": document_id, "deleted": False}, {"_id": 0})
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        if not can_access_document(user, document):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get latest version
+        latest_version = max(document["versions"], key=lambda x: x["version_number"])
+        
+        # Check if extracted text exists
+        extracted_text = latest_version.get("extracted_text")
+        if not extracted_text:
+            raise HTTPException(
+                status_code=400, 
+                detail="No text content available for summarization. Please ensure document has been processed."
+            )
+        
+        # Generate summary
+        summarization_result = await summarizer.summarize_document(
+            document_id=document_id,
+            document_text=extracted_text,
+            method=request.method,
+            max_length=request.max_length,
+            temperature=request.temperature,
+            additional_instructions=request.additional_instructions
+        )
+        
+        # Store summary in database
+        summary_doc = DocumentSummary(
+            document_id=document_id,
+            summary_type=request.method,
+            content=summarization_result["summary"],
+            word_count=summarization_result["metadata"]["word_count"],
+            reading_time_minutes=summarization_result["metadata"]["reading_time_minutes"],
+            model_used=summarization_result["metadata"].get("model_used"),
+            temperature=request.temperature,
+            max_tokens=request.max_length,
+            created_by=user["id"]
+        ).model_dump()
+        
+        await db.document_summaries.insert_one(summary_doc)
+        
+        # Add summary ID to metadata
+        summarization_result["metadata"]["summary_id"] = summary_doc["id"]
+        summarization_result["metadata"]["created_at"] = summary_doc["created_at"]
+        
+        # Create audit event
+        await create_audit_event(
+            actor=user,
+            action="DOCUMENT_SUMMARIZED",
+            resource_type="document",
+            resource_id=document_id,
+            permission_used="documents:read",
+            after_state={
+                "method": request.method,
+                "summary_length": len(summarization_result["summary"]),
+                "model_used": summarization_result["metadata"].get("model_used", "fallback")
+            }
+        )
+        
+        return SummaryResponse(
+            summary=summarization_result["summary"],
+            metadata=summarization_result["metadata"],
+            analysis=summarization_result.get("analysis")
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Summarization error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate summary")
+
+@api_router.get("/documents/{document_id}/summaries", response_model=List[DocumentSummary])
+async def get_document_summaries(
+    document_id: str,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Get all summaries for a document"""
+    # Check document access
+    document = await db.documents.find_one({"id": document_id, "deleted": False}, {"_id": 0})
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not can_access_document(user, document):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    skip = (page - 1) * page_size
+    summaries = await db.document_summaries.find(
+        {"document_id": document_id},
+        {"_id": 0}
+    ).sort("created_at", -1).skip(skip).limit(page_size).to_list(page_size)
+    
+    return [DocumentSummary(**summary) for summary in summaries]
+
+@api_router.get("/summaries/{summary_id}", response_model=DocumentSummary)
+async def get_summary(
+    summary_id: str,
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Get a specific summary"""
+    summary = await db.document_summaries.find_one({"id": summary_id}, {"_id": 0})
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    
+    # Check document access
+    document = await db.documents.find_one({"id": summary["document_id"], "deleted": False}, {"_id": 0})
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if not can_access_document(user, document):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    return DocumentSummary(**summary)
+
+@api_router.delete("/summaries/{summary_id}")
+async def delete_summary(
+    summary_id: str,
+    user: Dict = Depends(require_permission("documents:write"))
+):
+    """Delete a specific summary"""
+    summary = await db.document_summaries.find_one({"id": summary_id}, {"_id": 0})
+    if not summary:
+        raise HTTPException(status_code=404, detail="Summary not found")
+    
+    # Check document access and ownership
+    document = await db.documents.find_one({"id": summary["document_id"], "deleted": False}, {"_id": 0})
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if document["owner_id"] != user["id"] and "admin" not in user.get("roles", []):
+        raise HTTPException(status_code=403, detail="Only owner or admin can delete summaries")
+    
+    await db.document_summaries.delete_one({"id": summary_id})
+    
+    await create_audit_event(
+        actor=user,
+        action="SUMMARY_DELETED",
+        resource_type="summary",
+        resource_id=summary_id,
+        permission_used="documents:write"
+    )
+    
+    return {"message": "Summary deleted successfully"}
+
+@api_router.post("/summarize/raw", response_model=SummaryResponse)
+async def summarize_raw_text(
+    request: Dict[str, Any],
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Generate summary from raw text (not from a document)"""
+    try:
+        text = request.get("text", "")
+        method = request.get("method", "extractive")
+        max_length = request.get("max_length", 500)
+        temperature = request.get("temperature", 0.3)
+        additional_instructions = request.get("additional_instructions")
+        
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="No text provided")
+        
+        # Generate summary
+        summarization_result = await summarizer.summarize_document(
+            document_id="raw-text",
+            document_text=text,
+            method=method,
+            max_length=max_length,
+            temperature=temperature,
+            additional_instructions=additional_instructions
+        )
+        
+        return SummaryResponse(
+            summary=summarization_result["summary"],
+            metadata=summarization_result["metadata"],
+            analysis=summarization_result.get("analysis")
+        )
+        
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Raw summarization error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate summary")
+
+@api_router.get("/documents/{document_id}/analysis")
+async def analyze_document(
+    document_id: str,
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Analyze document content (topics, sentiment, type)"""
+    try:
+        # Get document
+        document = await db.documents.find_one({"id": document_id, "deleted": False}, {"_id": 0})
+        if not document:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        if not can_access_document(user, document):
+            raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Get latest version text
+        latest_version = max(document["versions"], key=lambda x: x["version_number"])
+        extracted_text = latest_version.get("extracted_text", "")
+        
+        if not extracted_text:
+            raise HTTPException(
+                status_code=400, 
+                detail="No text content available for analysis"
+            )
+        
+        # Analyze document
+        analysis = await summarizer._analyze_document(extracted_text)
+        
+        return {
+            "document_id": document_id,
+            "document_title": document["title"],
+            "analysis": analysis,
+            "extracted_text_preview": extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
+        }
+        
+    except Exception as e:
+        logger.error(f"Document analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to analyze document")
+
+@api_router.get("/documents/search/summarized")
+async def search_summarized_documents(
+    query: str = Query("", description="Search query"),
+    document_type: Optional[str] = Query(None, description="Filter by document type"),
+    topics: Optional[List[str]] = Query(None, description="Filter by topics"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    user: Dict = Depends(require_permission("documents:read"))
+):
+    """Search documents that have been summarized"""
+    try:
+        # Build pipeline for summarized documents
+        pipeline = []
+        
+        # Match documents with summaries
+        pipeline.append({
+            "$lookup": {
+                "from": "document_summaries",
+                "localField": "id",
+                "foreignField": "document_id",
+                "as": "summaries"
+            }
+        })
+        
+        # Filter documents with at least one summary
+        pipeline.append({
+            "$match": {
+                "summaries": {"$ne": []},
+                "deleted": False
+            }
+        })
+        
+        # RBAC filter - only accessible documents
+        user_groups = user.get("groups", [])
+        if "admin" not in user.get("roles", []):
+            pipeline.append({
+                "$match": {
+                    "$or": [
+                        {"owner_id": user["id"]},
+                        {"visibility": "ORG"},
+                        {"$and": [{"visibility": "GROUP"}, {"group_id": {"$in": user_groups}}]}
+                    ]
+                }
+            })
+        
+        # Text search if query provided
+        if query:
+            pipeline.append({
+                "$match": {
+                    "$or": [
+                        {"title": {"$regex": query, "$options": "i"}},
+                        {"description": {"$regex": query, "$options": "i"}},
+                        {"tags": {"$in": [query]}}
+                    ]
+                }
+            })
+        
+        # Lookup document metadata if available
+        pipeline.append({
+            "$lookup": {
+                "from": "document_metadata_enriched",
+                "localField": "id",
+                "foreignField": "document_id",
+                "as": "metadata"
+            }
+        })
+        
+        # Add metadata fields
+        pipeline.append({
+            "$addFields": {
+                "enriched_metadata": {"$arrayElemAt": ["$metadata", 0]},
+                "latest_summary": {"$arrayElemAt": ["$summaries", 0]},
+                "summary_count": {"$size": "$summaries"}
+            }
+        })
+        
+        # Filter by document type if specified
+        if document_type:
+            pipeline.append({
+                "$match": {
+                    "$or": [
+                        {"enriched_metadata.document_type": document_type},
+                        {"latest_summary.summary_type": document_type}
+                    ]
+                }
+            })
+        
+        # Filter by topics if specified
+        if topics:
+            pipeline.append({
+                "$match": {
+                    "enriched_metadata.extracted_keywords": {"$in": topics}
+                }
+            })
+        
+        # Project only needed fields
+        pipeline.append({
+            "$project": {
+                "id": 1,
+                "title": 1,
+                "description": 1,
+                "owner_id": 1,
+                "visibility": 1,
+                "created_at": 1,
+                "updated_at": 1,
+                "summary_count": 1,
+                "latest_summary": {
+                    "summary_type": 1,
+                    "created_at": 1,
+                    "word_count": 1
+                },
+                "enriched_metadata": {
+                    "document_type": 1,
+                    "extracted_keywords": 1,
+                    "validation_status": 1
+                }
+            }
+        })
+        
+        # Sort and paginate
+        pipeline.append({"$sort": {"latest_summary.created_at": -1}})
+        pipeline.append({"$skip": (page - 1) * page_size})
+        pipeline.append({"$limit": page_size})
+        
+        # Get count for pagination
+        count_pipeline = pipeline.copy()
+        count_pipeline[-3:] = [{"$count": "total"}]  # Remove sort, skip, limit, add count
+        
+        results = await db.documents.aggregate(pipeline).to_list(page_size)
+        count_result = await db.documents.aggregate(count_pipeline).to_list(1)
+        total = count_result[0]["total"] if count_result else 0
+        
+        return {
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "results": results
+        }
+        
+    except Exception as e:
+        logger.error(f"Search summarized documents error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to search summarized documents")
+    
 def require_permission(permission: str):
     async def permission_checker(user: Dict = Depends(get_current_user)):
         if not has_permission(user, permission):
@@ -2648,6 +3463,273 @@ async def list_documents(
     documents = await db.documents.find(query, {"_id": 0}).skip(skip).limit(page_size).to_list(page_size)
     
     return [DocumentResponse(**d) for d in documents]
+# ==================== ENHANCED SEARCH SERVICE ====================
+
+class DocumentSearchService:
+    """Service for searching documents with metadata enrichment"""
+    
+    def __init__(self, db):
+        self.db = db
+        self.document_search_collection = db.document_search
+        self.document_enriched_collection = db.document_metadata_enriched
+    
+    async def search_by_prompt(self, user_prompt: str, limit: int = 20, skip: int = 0, user: Dict = None) -> List[Dict[str, Any]]:
+        """
+        Search documents based on user prompt, prioritizing text search
+        then enriching with metadata from DocumentDataEnriched
+        """
+        # Step 1: Search in document_search.extracted_text
+        search_results = await self._search_extracted_text(user_prompt, limit, skip)
+        
+        if not search_results:
+            return []
+        
+        # Step 2: Filter by user permissions
+        filtered_results = await self._filter_by_permissions(search_results, user)
+        
+        if not filtered_results:
+            return []
+        
+        # Step 3: Enrich with DocumentDataEnriched metadata
+        enriched_results = await self._enrich_with_metadata(filtered_results)
+        
+        return enriched_results
+    
+    async def _search_extracted_text(self, prompt: str, limit: int, skip: int) -> List[Dict[str, Any]]:
+        """Search in extracted_text field using MongoDB text search or regex"""
+        
+        # Method 1: MongoDB Text Search (if text index exists)
+        try:
+            # Check if text index exists
+            indexes = await self.document_search_collection.index_information()
+            has_text_index = any('text' in idx for idx in indexes.values())
+            
+            if has_text_index:
+                # Use MongoDB text search
+                results = await self.document_search_collection.find(
+                    {"$text": {"$search": prompt}},
+                    {"score": {"$meta": "textScore"}}
+                ).sort([("score", {"$meta": "textScore"})]) \
+                 .skip(skip).limit(limit).to_list(length=limit)
+                
+                if results:
+                    return results
+        except Exception:
+            # Text index doesn't exist or search failed
+            pass
+        
+        # Method 2: Use regex search as fallback
+        # Split prompt into search terms
+        search_terms = re.findall(r'\w+', prompt.lower())
+        
+        if not search_terms:
+            return []
+        
+        # Create regex patterns for each term
+        regex_patterns = [re.compile(re.escape(term), re.IGNORECASE) for term in search_terms]
+        
+        # Build query: match any of the terms in extracted_text
+        or_conditions = []
+        for pattern in regex_patterns:
+            or_conditions.append({"extracted_text": {"$regex": pattern}})
+        
+        query = {"$or": or_conditions} if len(or_conditions) > 1 else or_conditions[0]
+        
+        results = await self.document_search_collection.find(query) \
+            .skip(skip).limit(limit).to_list(length=limit)
+        
+        return results
+    
+    async def _filter_by_permissions(self, search_results: List[Dict[str, Any]], user: Dict) -> List[Dict[str, Any]]:
+        """Filter search results by user permissions"""
+        
+        if not search_results or not user:
+            return search_results
+        
+        # Extract document_ids from search results
+        doc_ids = [result.get("document_id") for result in search_results if result.get("document_id")]
+        
+        if not doc_ids:
+            return []
+        
+        # Get documents with their full metadata for permission checking
+        documents = await self.db.documents.find(
+            {"id": {"$in": doc_ids}, "deleted": False},
+            {"_id": 0}
+        ).to_list(length=len(doc_ids))
+        
+        # Filter documents by user access
+        accessible_docs = []
+        for doc in documents:
+            if can_access_document(user, doc):
+                accessible_docs.append(doc)
+        
+        # Get the corresponding search results for accessible documents
+        accessible_doc_ids = {doc["id"] for doc in accessible_docs}
+        filtered_search_results = [
+            result for result in search_results 
+            if result.get("document_id") in accessible_doc_ids
+        ]
+        
+        return filtered_search_results
+    
+    async def _enrich_with_metadata(self, search_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Enrich search results with metadata from DocumentDataEnriched"""
+        
+        if not search_results:
+            return []
+        
+        # Extract document_ids from search results
+        doc_ids = [result.get("document_id") for result in search_results if result.get("document_id")]
+        
+        if not doc_ids:
+            return search_results
+        
+        # Get enriched metadata for these documents
+        enriched_metadata = await self.document_enriched_collection.find(
+            {"document_id": {"$in": doc_ids}}
+        ).to_list(length=len(doc_ids))
+        
+        # Create lookup dictionary for fast access
+        metadata_by_doc_id = {md["document_id"]: md for md in enriched_metadata}
+        
+        # Merge results
+        enriched_results = []
+        for result in search_results:
+            doc_id = result.get("document_id")
+            enriched_result = {
+                **result,
+                "enriched_metadata": metadata_by_doc_id.get(doc_id, {})
+            }
+            enriched_results.append(enriched_result)
+        
+        return enriched_results
+    
+    async def search_advanced(
+        self,
+        prompt: str,
+        user: Dict,
+        document_type: Optional[str] = None,
+        validation_status: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        group_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+        limit: int = 20,
+        skip: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Advanced search with filters"""
+        
+        # Build base query for text search
+        text_results = await self._search_extracted_text(prompt, limit=100, skip=0)
+        
+        if not text_results:
+            return []
+        
+        # Filter by permissions
+        filtered_results = await self._filter_by_permissions(text_results, user)
+        
+        if not filtered_results:
+            return []
+        
+        # Get document IDs from filtered results
+        filtered_doc_ids = [r.get("document_id") for r in filtered_results if r.get("document_id")]
+        
+        # Build filter query for DocumentDataEnriched
+        filter_query = {"document_id": {"$in": filtered_doc_ids}}
+        
+        if document_type:
+            filter_query["document_type"] = document_type
+        if validation_status:
+            filter_query["validation_status"] = validation_status
+        
+        # Apply date filters if provided
+        if date_from or date_to:
+            # Need to get document creation dates
+            docs = await self.db.documents.find(
+                {"id": {"$in": filtered_doc_ids}},
+                {"id": 1, "created_at": 1}
+            ).to_list(length=len(filtered_doc_ids))
+            
+            # Filter by date range
+            date_filtered_ids = []
+            for doc in docs:
+                doc_date = doc.get("created_at")
+                if not doc_date:
+                    continue
+                
+                if date_from and doc_date < date_from:
+                    continue
+                if date_to and doc_date > date_to:
+                    continue
+                
+                date_filtered_ids.append(doc["id"])
+            
+            filter_query["document_id"]["$in"] = date_filtered_ids
+        
+        # Get filtered enriched documents
+        filtered_enriched = await self.document_enriched_collection.find(filter_query) \
+            .skip(skip).limit(limit).to_list(length=limit)
+        
+        enriched_doc_ids = [doc["document_id"] for doc in filtered_enriched]
+        
+        # Get search data for filtered documents
+        search_data = await self.document_search_collection.find(
+            {"document_id": {"$in": enriched_doc_ids}}
+        ).to_list(length=len(enriched_doc_ids))
+        
+        # Apply additional filters from document_search
+        if tags:
+            search_data = [doc for doc in search_data 
+                          if any(tag in doc.get("tags", []) for tag in tags)]
+        if group_id:
+            search_data = [doc for doc in search_data 
+                          if doc.get("group_id") == group_id]
+        
+        # Enrich and return
+        return await self._enrich_with_metadata(search_data)
+    
+    async def get_relevant_context(self, prompt: str, user: Dict, max_chars: int = 2000) -> str:
+        """Get relevant text context from search results for RAG or similar use cases"""
+        
+        results = await self.search_by_prompt(prompt, limit=5, user=user)
+        
+        context_parts = []
+        total_chars = 0
+        
+        for result in results:
+            extracted_text = result.get("extracted_text", "")
+            if not extracted_text:
+                continue
+            
+            # Truncate if needed
+            remaining_chars = max_chars - total_chars
+            if remaining_chars <= 0:
+                break
+            
+            if len(extracted_text) > remaining_chars:
+                # Try to cut at sentence boundary
+                truncated = extracted_text[:remaining_chars]
+                last_period = truncated.rfind('.')
+                if last_period > 0:
+                    truncated = truncated[:last_period + 1]
+                context_text = truncated
+            else:
+                context_text = extracted_text
+            
+            # Add metadata context
+            metadata = result.get("enriched_metadata", {})
+            metadata_info = f"[Document: {metadata.get('document_type', 'Unknown')}, "
+            metadata_info += f"Status: {metadata.get('validation_status', 'Unknown')}]"
+            
+            context_parts.append(f"{metadata_info}\n{context_text}")
+            total_chars += len(context_text)
+        
+        return "\n\n---\n\n".join(context_parts)
+
+# Create search service instance
+search_service = DocumentSearchService(db)
+
 
 @api_router.get("/documents/{doc_id}", response_model=DocumentResponse)
 async def get_document(doc_id: str, track_view: bool = True, user: Dict = Depends(require_permission("documents:read"))):
