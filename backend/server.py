@@ -980,7 +980,7 @@ def decode_license_key(license_key: str) -> Optional[Dict]:
         # Verify signature
         data = f"{license_type}|{org_name}|{max_users}|{max_docs}|{expires_str}"
         expected_sig = hashlib.sha256(f"{data}|{LICENSE_SECRET}".encode()).hexdigest()[:16]
-        
+        print(expected_sig)
         if signature != expected_sig:
             return None
         
@@ -3230,8 +3230,8 @@ async def generate_license(
     limits = {
         "TRIAL": {"users": 5, "docs": 100},
         "STANDARD": {"users": 25, "docs": 10000},
-        "ENTERPRISE": {"users": 1000, "docs": 1000000}
-    }
+        "ENTERPRISE": {"users": 9999, "docs": 1000000}
+    } 
     
     key = generate_license_key(
         license_type=license_type,
@@ -4827,11 +4827,10 @@ async def startup_event():
             await db.roles.insert_one(role)
     
     # Seed admin user
-    admin_email = os.environ.get('ADMIN_USERNAME')
-    admin_password = os.environ.get('ADMIN_PASSWORD')
+    admin_email = "admin@paperless.com"
     existing_admin = await db.users.find_one({"email": admin_email})
     if not existing_admin:
-        admin_password = bcrypt.hashpw(admin_password.encode(), bcrypt.gensalt()).decode()
+        admin_password = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
         admin_user = {
             "id": str(uuid.uuid4()),
             "email": admin_email,
@@ -4844,7 +4843,7 @@ async def startup_event():
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         await db.users.insert_one(admin_user)
-        logger.info(f"Created admin user: {admin_email} / {admin_password}")
+        logger.info(f"Created admin user: {admin_email} / admin123")
     
     # Seed default retention schedules
     schedules = [

@@ -114,7 +114,7 @@ export default function LoginPage() {
                       <Input
                         id="login-email"
                         type="email"
-                        placeholder="admin@paperless.com"
+                        placeholder=""
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
                         required
@@ -126,7 +126,7 @@ export default function LoginPage() {
                       <Input
                         id="login-password"
                         type="password"
-                        placeholder="admin123"
+                        placeholder=""
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         required
@@ -142,7 +142,7 @@ export default function LoginPage() {
                       {isLoading ? "Signing in..." : "Sign In"}
                     </Button>
                     <p className="text-xs text-muted-foreground text-center mt-4">
-                      Demo: admin@paperless.com / admin123
+                    
                     </p>
                   </form>
                 </TabsContent>

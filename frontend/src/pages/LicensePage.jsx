@@ -41,6 +41,10 @@ export default function LicensePage() {
   const [showActivateDialog, setShowActivateDialog] = useState(false);
   const [trialKey, setTrialKey] = useState(null);
   const [generatingTrial, setGeneratingTrial] = useState(false);
+  const [standardKey, setStandardKey] = useState(null);
+  const [generatingStandard, setGeneratingStandard] = useState(false);
+  const [enterpriseKey, setEnterpriseKey] = useState(null);
+  const [generatingEnterprise, setGeneratingEnterprise] = useState(false);
 
   const fetchLicenseStatus = async () => {
     try {
@@ -111,6 +115,68 @@ export default function LicensePage() {
     }
   };
 
+ const handleGenerateStandard = async () => {
+  setGeneratingStandard(true);
+  try {
+    const response = await axios.get(`${API}/license/generate/STANDARD`, {
+      params: {
+        org_name: "Your Organization",
+        days: 365
+      },
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    
+    // Transform response to match expected format
+    const formattedResponse = {
+      license_key: response.data.license_key,
+      license_type: response.data.type || "STANDARD",
+      expires_at: new Date(Date.now() + response.data.valid_days * 24 * 60 * 60 * 1000).toISOString(),
+      max_users: response.data.max_users,
+      max_documents: response.data.max_documents,
+      organization_name: response.data.organization
+    };
+    
+    setStandardKey(formattedResponse);
+    toast.success("Standard license generated!");
+  } catch (error) {
+    console.error("Error generating standard license:", error);
+    toast.error(error.response?.data?.detail || "Failed to generate standard license");
+  } finally {
+    setGeneratingStandard(false);
+  }
+};
+
+const handleGenerateEnterprise = async () => {
+  setGeneratingEnterprise(true);
+  try {
+    const response = await axios.get(`${API}/license/generate/ENTERPRISE`, {
+      params: {
+        org_name: "Your Organization", 
+        days: 365
+      },
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    
+    // Transform response to match expected format
+    const formattedResponse = {
+      license_key: response.data.license_key,
+      license_type: response.data.type || "ENTERPRISE",
+      expires_at: new Date(Date.now() + response.data.valid_days * 24 * 60 * 60 * 1000).toISOString(),
+      max_users: response.data.max_users,
+      max_documents: response.data.max_documents,
+      organization_name: response.data.organization
+    };
+    
+    setEnterpriseKey(formattedResponse);
+    toast.success("Enterprise license generated!");
+  } catch (error) {
+    console.error("Error generating enterprise license:", error);
+    toast.error(error.response?.data?.detail || "Failed to generate enterprise license");
+  } finally {
+    setGeneratingEnterprise(false);
+  }
+};
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     toast.success("Copied to clipboard");
@@ -135,6 +201,12 @@ export default function LicensePage() {
       ENTERPRISE: "bg-purple-50 text-purple-700 border-purple-200"
     };
     return styles[type] || "bg-gray-50 text-gray-700 border-gray-200";
+  };
+
+  // Auto-fill generated license key to activate dialog
+  const handleActivateGeneratedLicense = (licenseKey) => {
+    setLicenseKey(licenseKey);
+    setShowActivateDialog(true);
   };
 
   return (
@@ -316,7 +388,7 @@ export default function LicensePage() {
         </Card>
       )}
 
-      {/* Trial License Generator (for demo) */}
+      {/* Trial License Generator */}
       {!license?.is_valid && (
         <Card className="border border-amber-200 bg-amber-50/50">
           <CardHeader>
@@ -360,6 +432,23 @@ export default function LicensePage() {
                     {trialKey.max_documents} documents
                   </span>
                 </div>
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={() => copyToClipboard(trialKey.license_key)}
+                    variant="outline" 
+                    className="flex-1"
+                  >
+                    <Copy className="w-4 h-4 mr-2" />
+                    Copy Key
+                  </Button>
+                  <Button 
+                    onClick={() => handleActivateGeneratedLicense(trialKey.license_key)}
+                    className="flex-1 bg-amber-600 hover:bg-amber-700"
+                  >
+                    <Key className="w-4 h-4 mr-2" />
+                    Activate Now
+                  </Button>
+                </div>
                 <p className="text-xs text-muted-foreground">
                   Copy this key and use the "Activate License" button above to activate.
                 </p>
@@ -371,6 +460,162 @@ export default function LicensePage() {
                 data-testid="generate-trial-btn"
               >
                 {generatingTrial ? "Generating..." : "Generate Trial License"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Standard License Generator */}
+      {hasPermission("admin") && !license?.is_valid && (
+        <Card className="border border-blue-200 bg-blue-50/50">
+          <CardHeader>
+            <CardTitle className="text-lg font-heading flex items-center gap-2">
+              <Shield className="w-5 h-5 text-blue-600" />
+              Get a Standard License
+            </CardTitle>
+            <CardDescription>
+              Generate a Standard license to upgrade your NextGen DMS
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {standardKey ? (
+              <div className="space-y-3">
+                <div className="p-4 rounded bg-white border">
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Your Standard License Key</Label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <code className="flex-1 p-2 bg-muted rounded font-mono text-sm break-all">
+                      {standardKey.license_key}
+                    </code>
+                    <Button 
+                      variant="outline" 
+                      size="icon"
+                      onClick={() => copyToClipboard(standardKey.license_key)}
+                    >
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-4 h-4 text-muted-foreground" />
+                    Expires: {new Date(standardKey.expires_at).toLocaleDateString()}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Users className="w-4 h-4 text-muted-foreground" />
+                    {standardKey.max_users} users
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <FileText className="w-4 h-4 text-muted-foreground" />
+                    {standardKey.max_documents} documents
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={() => copyToClipboard(standardKey.license_key)}
+                    variant="outline" 
+                    className="flex-1"
+                  >
+                    <Copy className="w-4 h-4 mr-2" />
+                    Copy Key
+                  </Button>
+                  <Button 
+                    onClick={() => handleActivateGeneratedLicense(standardKey.license_key)}
+                    className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  >
+                    <Key className="w-4 h-4 mr-2" />
+                    Activate Now
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Copy this key and use the "Activate License" button above to activate.
+                </p>
+              </div>
+            ) : (
+              <Button 
+                onClick={handleGenerateStandard}
+                disabled={generatingStandard}
+                data-testid="generate-standard-btn"
+              >
+                {generatingStandard ? "Generating..." : "Generate Standard License"}
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Enterprise License Generator */}
+      {hasPermission("admin") && !license?.is_valid && (
+        <Card className="border border-purple-200 bg-purple-50/50">
+          <CardHeader>
+            <CardTitle className="text-lg font-heading flex items-center gap-2">
+              <Building className="w-5 h-5 text-purple-600" />
+              Get an Enterprise License
+            </CardTitle>
+            <CardDescription>
+              Generate an Enterprise license for your organization
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {enterpriseKey ? (
+              <div className="space-y-3">
+                <div className="p-4 rounded bg-white border">
+                  <Label className="text-xs uppercase tracking-wider text-muted-foreground">Your Enterprise License Key</Label>
+                  <div className="flex items-center gap-2 mt-2">
+                    <code className="flex-1 p-2 bg-muted rounded font-mono text-sm break-all">
+                      {enterpriseKey.license_key}
+                    </code>
+                    <Button 
+                      variant="outline" 
+                      size="icon"
+                      onClick={() => copyToClipboard(enterpriseKey.license_key)}
+                    >
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-4 text-sm">
+                  <span className="flex items-center gap-1">
+                    <Calendar className="w-4 h-4 text-muted-foreground" />
+                    Expires: {new Date(enterpriseKey.expires_at).toLocaleDateString()}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Users className="w-4 h-4 text-muted-foreground" />
+                    {enterpriseKey.max_users} users
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <FileText className="w-4 h-4 text-muted-foreground" />
+                    {enterpriseKey.max_documents} documents
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <Button 
+                    onClick={() => copyToClipboard(enterpriseKey.license_key)}
+                    variant="outline" 
+                    className="flex-1"
+                  >
+                    <Copy className="w-4 h-4 mr-2" />
+                    Copy Key
+                  </Button>
+                  <Button 
+                    onClick={() => handleActivateGeneratedLicense(enterpriseKey.license_key)}
+                    className="flex-1 bg-purple-600 hover:bg-purple-700"
+                  >
+                    <Key className="w-4 h-4 mr-2" />
+                    Activate Now
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Copy this key and use the "Activate License" button above to activate.
+                </p>
+              </div>
+            ) : (
+              <Button 
+                onClick={handleGenerateEnterprise}
+                disabled={generatingEnterprise}
+                data-testid="generate-enterprise-btn"
+              >
+                {generatingEnterprise ? "Generating..." : "Generate Enterprise License"}
               </Button>
             )}
           </CardContent>
