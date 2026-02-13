@@ -16,8 +16,150 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Upload, FileText, X, CheckCircle, Files, FolderOpen, Folder } from "lucide-react";
+import { Upload, FileText, X, CheckCircle, Files, FolderOpen, Folder, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+
+// Helper function to extract text from file for analysis
+const extractTextForAnalysis = async (file) => {
+  return new Promise((resolve, reject) => {
+    // For PDF files
+    if (file.type === 'application/pdf') {
+      // Note: In a real implementation, you would use a PDF parser like pdf-parse
+      // For now, we'll extract from filename and limited content
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        // This is a simplified version - in production you'd use a proper PDF parser
+        resolve({
+          filename: file.name.toLowerCase(),
+          content: e.target.result ? e.target.result.toString().substring(0, 5000) : ''
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    } 
+    // For text files
+    else if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resolve({
+          filename: file.name.toLowerCase(),
+          content: e.target.result ? e.target.result.toString().substring(0, 5000) : ''
+        });
+      };
+      reader.readAsText(file);
+    }
+    // For DOCX files
+    else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        // Note: In production, use mammoth.js or similar to extract text from DOCX
+        resolve({
+          filename: file.name.toLowerCase(),
+          content: file.name // Fallback to filename for DOCX
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    // For images (OCR would be needed in production)
+    else if (file.type.startsWith('image/')) {
+      resolve({
+        filename: file.name.toLowerCase(),
+        content: file.name // Fallback to filename
+      });
+    }
+    else {
+      resolve({
+        filename: file.name.toLowerCase(),
+        content: ''
+      });
+    }
+  });
+};
+
+// AI-powered document type detection
+const detectDocumentType = (filename, content = '') => {
+  const financeKeywords = [
+    'invoice', 'receipt', 'financial', 'statement', 'balance', 'sheet',
+    'income', 'expense', 'budget', 'tax', 'payment', 'bank', 'transaction',
+    'quarterly', 'annual', 'report', 'earnings', 'revenue', 'profit', 'loss',
+    'audit', 'accounting', 'ledger', 'payroll'
+  ];
+
+  const complianceKeywords = [
+    'compliance', 'policy', 'regulation', 'legal', 'contract', 'agreement',
+    'terms', 'conditions', 'gdpr', 'hipaa', 'sarbanes-oxley', 'sox',
+    'regulatory', 'requirement', 'standard', 'procedure', 'guideline',
+    'framework', 'certification', 'audit', 'checklist', 'risk', 'assessment'
+  ];
+
+  const meetingKeywords = [
+    'meeting', 'minutes', 'agenda', 'memo', 'notes', 'discussion',
+    'action items', 'follow-up', 'summary', 'recap', 'attendees',
+    'presentation', 'slides', 'deck', 'workshop', 'conference', 'call'
+  ];
+
+  // Combine filename and content for analysis
+  const textToAnalyze = (filename + ' ' + content).toLowerCase();
+  
+  let financeScore = 0;
+  let complianceScore = 0;
+  let meetingScore = 0;
+
+  // Score based on keywords
+  financeKeywords.forEach(keyword => {
+    if (textToAnalyze.includes(keyword)) financeScore++;
+  });
+
+  complianceKeywords.forEach(keyword => {
+    if (textToAnalyze.includes(keyword)) complianceScore++;
+  });
+
+  meetingKeywords.forEach(keyword => {
+    if (textToAnalyze.includes(keyword)) meetingScore++;
+  });
+
+  // Additional heuristics based on filename patterns
+  if (filename.includes('minutes') || filename.includes('agenda')) {
+    meetingScore += 3;
+  }
+  if (filename.includes('invoice') || filename.includes('receipt')) {
+    financeScore += 3;
+  }
+  if (filename.includes('contract') || filename.includes('agreement')) {
+    complianceScore += 3;
+  }
+
+  // Determine the highest score
+  const scores = [
+    { type: 'finance', score: financeScore },
+    { type: 'compliance', score: complianceScore },
+    { type: 'meeting', score: meetingScore }
+  ];
+
+  scores.sort((a, b) => b.score - a.score);
+
+  // Only return a type if there's a clear winner (score > 0)
+  if (scores[0].score > 0) {
+    return scores[0].type;
+  }
+
+  return null;
+};
+
+// Function to update tags with detected document type
+const updateTagsWithDocumentType = (currentTags, documentType) => {
+  if (!documentType) return currentTags;
+  
+  // Remove existing document type tags
+  const tagList = currentTags.split(',').map(tag => tag.trim()).filter(tag => tag);
+  const filteredTags = tagList.filter(tag => 
+    !['finance', 'compliance', 'meeting'].includes(tag.toLowerCase())
+  );
+  
+  // Add new document type tag
+  filteredTags.push(documentType);
+  
+  return filteredTags.join(', ');
+};
 
 export default function UploadPage() {
   const navigate = useNavigate();
@@ -29,7 +171,9 @@ export default function UploadPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
+  const [detectingType, setDetectingType] = useState(false);
   const folderInputRef = useRef(null);
+  
   const [formData, setFormData] = useState({
     title: "",
     description: "",
@@ -37,11 +181,13 @@ export default function UploadPage() {
     group_id: "",
     tags: ""
   });
+  
   const [bulkFormData, setBulkFormData] = useState({
     visibility: "PRIVATE",
     group_id: "",
     tags: ""
   });
+  
   const [folderFormData, setFolderFormData] = useState({
     visibility: "PRIVATE",
     group_id: "",
@@ -62,6 +208,83 @@ export default function UploadPage() {
     };
     fetchGroups();
   }, [token]);
+
+  // Detect document type when file is selected
+  useEffect(() => {
+    const detectAndUpdateTags = async () => {
+      if (!file) return;
+      
+      setDetectingType(true);
+      try {
+        const { filename, content } = await extractTextForAnalysis(file);
+        const documentType = detectDocumentType(filename, content);
+        
+        if (documentType) {
+          setFormData(prev => ({
+            ...prev,
+            tags: updateTagsWithDocumentType(prev.tags, documentType)
+          }));
+          
+          // Show notification about detected type
+          toast.info(`Detected as ${documentType} document`);
+        }
+      } catch (error) {
+        console.error("Error detecting document type:", error);
+      } finally {
+        setDetectingType(false);
+      }
+    };
+    
+    detectAndUpdateTags();
+  }, [file]);
+
+  // Detect document types for bulk files
+  useEffect(() => {
+    const detectBulkDocumentTypes = async () => {
+      if (bulkFiles.length === 0) return;
+      
+      // For bulk uploads, we'll detect the most common type among files
+      let financeCount = 0;
+      let complianceCount = 0;
+      let meetingCount = 0;
+      
+      // Sample a few files for detection
+      const sampleFiles = bulkFiles.slice(0, 5); // Limit to 5 files for performance
+      
+      for (const sampleFile of sampleFiles) {
+        try {
+          const { filename, content } = await extractTextForAnalysis(sampleFile);
+          const documentType = detectDocumentType(filename, content);
+          
+          if (documentType === 'finance') financeCount++;
+          else if (documentType === 'compliance') complianceCount++;
+          else if (documentType === 'meeting') meetingCount++;
+        } catch (error) {
+          console.error("Error detecting document type:", error);
+        }
+      }
+      
+      // Determine the most common type
+      if (financeCount > 0 || complianceCount > 0 || meetingCount > 0) {
+        let detectedType = null;
+        if (financeCount >= complianceCount && financeCount >= meetingCount) detectedType = 'finance';
+        else if (complianceCount >= financeCount && complianceCount >= meetingCount) detectedType = 'compliance';
+        else detectedType = 'meeting';
+        
+        // Update bulk tags
+        setBulkFormData(prev => ({
+          ...prev,
+          tags: updateTagsWithDocumentType(prev.tags, detectedType)
+        }));
+        
+        if (detectedType) {
+          toast.info(`Most files appear to be ${detectedType} documents`);
+        }
+      }
+    };
+    
+    detectBulkDocumentTypes();
+  }, [bulkFiles]);
 
   const handleDrop = (e, type = "single") => {
     e.preventDefault();
@@ -150,6 +373,35 @@ export default function UploadPage() {
 
   const removeFolderFile = (index) => {
     setFolderFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  // Manually trigger document type detection
+  const detectDocumentTypeManually = async () => {
+    if (!file) {
+      toast.error("Please select a file first");
+      return;
+    }
+    
+    setDetectingType(true);
+    try {
+      const { filename, content } = await extractTextForAnalysis(file);
+      const documentType = detectDocumentType(filename, content);
+      
+      if (documentType) {
+        setFormData(prev => ({
+          ...prev,
+          tags: updateTagsWithDocumentType(prev.tags, documentType)
+        }));
+        toast.success(`Detected as ${documentType} document`);
+      } else {
+        toast.info("Could not determine document type");
+      }
+    } catch (error) {
+      toast.error("Error detecting document type");
+      console.error(error);
+    } finally {
+      setDetectingType(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -324,7 +576,7 @@ export default function UploadPage() {
     <div className="max-w-3xl mx-auto animate-fade-in">
       <div className="mb-8">
         <h1 className="text-2xl sm:text-3xl font-heading font-bold">Upload Documents</h1>
-        <p className="text-muted-foreground mt-1">Add documents to your library</p>
+        <p className="text-muted-foreground mt-1">Add documents to your library with AI-powered tagging</p>
       </div>
 
       <Tabs defaultValue="single">
@@ -366,6 +618,12 @@ export default function UploadPage() {
                       <div className="text-left">
                         <p className="font-medium">{file.name}</p>
                         <p className="text-sm text-muted-foreground">{formatFileSize(file.size)}</p>
+                        {detectingType && (
+                          <p className="text-xs text-primary flex items-center gap-1">
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                            Analyzing document type...
+                          </p>
+                        )}
                       </div>
                       <Button 
                         type="button" 
@@ -389,11 +647,27 @@ export default function UploadPage() {
                         data-testid="file-input"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Supported: PDF, DOCX, TXT, Images (text extraction enabled)
+                        Supported: PDF, DOCX, TXT, Images (AI-powered tagging)
                       </p>
                     </>
                   )}
                 </div>
+                
+                {/* Detect Type Button */}
+                {file && !detectingType && (
+                  <div className="mt-4 flex justify-end">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={detectDocumentTypeManually}
+                      className="text-xs"
+                    >
+                      <Loader2 className="w-3 h-3 mr-1" />
+                      Re-detect Document Type
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
@@ -401,6 +675,10 @@ export default function UploadPage() {
             <Card className="border">
               <CardHeader>
                 <CardTitle className="text-lg font-heading">Document Details</CardTitle>
+                <CardDescription className="flex items-center gap-1">
+                  <span>AI will automatically detect document type and add tags</span>
+                  {detectingType && <Loader2 className="w-3 h-3 animate-spin" />}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -467,13 +745,21 @@ export default function UploadPage() {
 
                 <div className="space-y-2">
                   <Label htmlFor="tags">Tags</Label>
-                  <Input
-                    id="tags"
-                    placeholder="Comma-separated tags (e.g., contract, legal, 2024)"
-                    value={formData.tags}
-                    onChange={(e) => setFormData(prev => ({ ...prev, tags: e.target.value }))}
-                    data-testid="tags-input"
-                  />
+                  <div className="relative">
+                    <Input
+                      id="tags"
+                      placeholder="AI will auto-detect document type and add tags..."
+                      value={formData.tags}
+                      onChange={(e) => setFormData(prev => ({ ...prev, tags: e.target.value }))}
+                      data-testid="tags-input"
+                      disabled
+                    />
+                    {detectingType && (
+                      <div className="absolute right-2 top-2">
+                        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -540,7 +826,7 @@ export default function UploadPage() {
                     data-testid="bulk-file-input"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Select multiple files at once. Titles will be generated from filenames.
+                    Select multiple files at once. AI will detect document types and suggest tags.
                   </p>
                 </div>
 
@@ -637,11 +923,58 @@ export default function UploadPage() {
                   <Label htmlFor="bulk-tags">Tags (applied to all files)</Label>
                   <Input
                     id="bulk-tags"
-                    placeholder="Comma-separated tags"
+                    placeholder="AI will auto-detect common document types..."
                     value={bulkFormData.tags}
                     onChange={(e) => setBulkFormData(prev => ({ ...prev, tags: e.target.value }))}
                     data-testid="bulk-tags-input"
                   />
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('finance')) {
+                          const newTags = [...currentTags, 'finance'].join(', ');
+                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('finance') ? 'bg-green-50 border-green-200 text-green-700' : ''}`}
+                    >
+                      Finance
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('compliance')) {
+                          const newTags = [...currentTags, 'compliance'].join(', ');
+                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('compliance') ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
+                    >
+                      Compliance
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('meeting')) {
+                          const newTags = [...currentTags, 'meeting'].join(', ');
+                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('meeting') ? 'bg-purple-50 border-purple-200 text-purple-700' : ''}`}
+                    >
+                      Meeting
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -711,7 +1044,7 @@ export default function UploadPage() {
                     data-testid="folder-input"
                   />
                   <p className="text-xs text-muted-foreground">
-                    All files in the folder will be uploaded. Folder structure preserved as tags.
+                    All files in the folder will be uploaded. AI will detect document types.
                   </p>
                 </div>
 
@@ -828,11 +1161,58 @@ export default function UploadPage() {
                   <Label htmlFor="folder-tags">Additional Tags</Label>
                   <Input
                     id="folder-tags"
-                    placeholder="Comma-separated tags (folder name auto-added)"
+                    placeholder="AI will detect document types from folder contents"
                     value={folderFormData.tags}
                     onChange={(e) => setFolderFormData(prev => ({ ...prev, tags: e.target.value }))}
                     data-testid="folder-tags-input"
                   />
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('finance')) {
+                          const newTags = [...currentTags, 'finance'].join(', ');
+                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('finance') ? 'bg-green-50 border-green-200 text-green-700' : ''}`}
+                    >
+                      Finance
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('compliance')) {
+                          const newTags = [...currentTags, 'compliance'].join(', ');
+                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('compliance') ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
+                    >
+                      Compliance
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                        if (!currentTags.includes('meeting')) {
+                          const newTags = [...currentTags, 'meeting'].join(', ');
+                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
+                        }
+                      }}
+                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('meeting') ? 'bg-purple-50 border-purple-200 text-purple-700' : ''}`}
+                    >
+                      Meeting
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </Card>

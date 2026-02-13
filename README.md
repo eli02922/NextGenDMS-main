@@ -124,15 +124,6 @@ The application will be available at:
 - Backend API: http://localhost:8001
 - API Documentation: http://localhost:8001/docs
 
-## Default Credentials
-
-After first startup, the system creates a default admin account:
-
-| Role | Email | Password |
-|------|-------|----------|
-| Admin | admin@paperless.com | admin123 |
-
-**Important:** Change the default password immediately after first login.
 
 ## License Activation
 

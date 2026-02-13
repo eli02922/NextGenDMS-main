@@ -2956,24 +2956,7 @@ async def startup_event():
         if not existing:
             await db.roles.insert_one(role)
     
-    # Seed admin user
-    admin_email = "admin@paperless.com"
-    existing_admin = await db.users.find_one({"email": admin_email})
-    if not existing_admin:
-        admin_password = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
-        admin_user = {
-            "id": str(uuid.uuid4()),
-            "email": admin_email,
-            "full_name": "System Administrator",
-            "password_hash": admin_password,
-            "is_active": True,
-            "roles": ["admin"],
-            "groups": [],
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.users.insert_one(admin_user)
-        logger.info(f"Created admin user: {admin_email} / admin123")
+
     
     # Start background processor as async task
     AUTO_START_PROCESSOR = os.environ.get('AUTO_START_BACKGROUND_PROCESSOR', 'false').lower() == 'true'
@@ -4827,10 +4810,11 @@ async def startup_event():
             await db.roles.insert_one(role)
     
     # Seed admin user
-    admin_email = "admin@paperless.com"
+    admin_email = os.environ.get('ADMIN_USERNAME')
+    admin_password = os.environ.get('ADMIN_PASSWORD')
     existing_admin = await db.users.find_one({"email": admin_email})
     if not existing_admin:
-        admin_password = bcrypt.hashpw("admin123".encode(), bcrypt.gensalt()).decode()
+        admin_password = bcrypt.hashpw(admin_password.encode(), bcrypt.gensalt()).decode()
         admin_user = {
             "id": str(uuid.uuid4()),
             "email": admin_email,
@@ -4843,7 +4827,7 @@ async def startup_event():
             "updated_at": datetime.now(timezone.utc).isoformat()
         }
         await db.users.insert_one(admin_user)
-        logger.info(f"Created admin user: {admin_email} / admin123")
+        logger.info(f"Created admin user: {admin_email} / {admin_password}")
     
     # Seed default retention schedules
     schedules = [
