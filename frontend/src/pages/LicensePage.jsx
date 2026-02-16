@@ -389,7 +389,7 @@ const handleGenerateEnterprise = async () => {
       )}
 
       {/* Trial License Generator */}
-      {!license?.is_valid && (
+      {(
         <Card className="border border-amber-200 bg-amber-50/50">
           <CardHeader>
             <CardTitle className="text-lg font-heading flex items-center gap-2">
@@ -467,7 +467,7 @@ const handleGenerateEnterprise = async () => {
       )}
 
       {/* Standard License Generator */}
-      {hasPermission("admin") && !license?.is_valid && (
+      {hasPermission("admin") && (
         <Card className="border border-blue-200 bg-blue-50/50">
           <CardHeader>
             <CardTitle className="text-lg font-heading flex items-center gap-2">
