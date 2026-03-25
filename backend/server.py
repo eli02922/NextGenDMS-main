@@ -34,6 +34,24 @@ import re
 from typing import Tuple, Union
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
+import magic
+import pytesseract
+from PIL import Image
+import fitz  # PyMuPDF
+import openpyxl
+import csv
+import xml.etree.ElementTree as ET
+import zipfile
+import tarfile
+import email
+from email import policy
+from email.parser import BytesParser
+import striprtf
+import ebooklib
+from ebooklib import epub
+from bs4 import BeautifulSoup
+import json
+from pptx import Presentation  # Add this import for PPTX support
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -112,7 +130,81 @@ MEETING_KEYWORDS = {
 }
 
 # ==================== SUMMARIZATION MODELS ====================
+class MimeTypeMapper:
+    """Comprehensive mime-type mapping and classification"""
+    
+    WORD_PROCESSING = [
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.oasis.opendocument.text",
+        "application/vnd.sun.xml.writer",
+        "application/rtf",
+        "text/rtf"
+    ]
+    
+    SPREADSHEETS = [
+        "application/vnd.ms-excel",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.oasis.opendocument.spreadsheet",
+        "application/vnd.sun.xml.calc",
+        "text/csv",
+        "application/csv"
+    ]
+    
+    PRESENTATIONS = [
+        "application/vnd.ms-powerpoint",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.oasis.opendocument.presentation",
+        "application/vnd.sun.xml.impress"
+    ]
+    
+    PDF = ["application/pdf", "application/x-pdf"]
+    
+    IMAGES = [
+        "image/jpeg", "image/png", "image/gif", "image/tiff", "image/bmp",
+        "image/webp", "image/svg+xml", "image/x-icon", "image/heic", "image/heif"
+    ]
+    
+    TEXT = [
+        "text/plain", "text/markdown", "text/html", "text/css", "text/javascript",
+        "text/x-python", "text/x-java", "text/x-c", "text/x-c++", "text/x-ruby",
+        "text/x-php", "text/x-go", "text/x-rust", "text/x-sql", "text/x-yaml",
+        "text/x-toml", "text/xml", "application/xml", "application/json",
+        "application/ld+json", "application/x-yaml", "application/x-toml"
+    ]
+    
+    ARCHIVES = [
+        "application/zip", "application/x-zip-compressed", "application/x-tar",
+        "application/x-gzip", "application/x-bzip2", "application/x-7z-compressed",
+        "application/x-rar-compressed", "application/x-xz"
+    ]
+    
+    EMAILS = ["message/rfc822", "message/partial"]
+    DATABASE = ["application/vnd.sqlite3", "application/x-sqlite3"]
+    CAD = ["application/dwg", "application/x-autocad", "image/vnd.dwg", "application/x-dxf"]
+    EBOOKS = ["application/epub+zip", "application/x-mobipocket-ebook", "application/vnd.amazon.ebook"]
+    AUDIO = ["audio/mpeg", "audio/wav", "audio/ogg", "audio/flac", "audio/aac", "audio/mp4"]
+    VIDEO = ["video/mp4", "video/mpeg", "video/quicktime", "video/x-msvideo", "video/x-matroska", "video/webm"]
+    
+    @classmethod
+    def get_category(cls, mime_type: str) -> str:
+        if mime_type in cls.WORD_PROCESSING: return "word_processing"
+        elif mime_type in cls.SPREADSHEETS: return "spreadsheet"
+        elif mime_type in cls.PRESENTATIONS: return "presentation"
+        elif mime_type in cls.PDF: return "pdf"
+        elif mime_type in cls.IMAGES: return "image"
+        elif mime_type in cls.TEXT: return "text"
+        elif mime_type in cls.ARCHIVES: return "archive"
+        elif mime_type in cls.EMAILS: return "email"
+        elif mime_type in cls.DATABASE: return "database"
+        elif mime_type in cls.CAD: return "cad"
+        elif mime_type in cls.EBOOKS: return "ebook"
+        elif mime_type in cls.AUDIO: return "audio"
+        elif mime_type in cls.VIDEO: return "video"
+        else: return "unknown"
+    
 
+        
 class SummarizeRequest(BaseModel):
     """Request model for document summarization"""
     method: str = Field("extractive", description="extractive, abstractive, bullet_points, executive")
@@ -446,6 +538,470 @@ class DocumentSummarizer:
                 "word_count": len(text.split()),
                 "estimated_reading_time": len(text.split()) / 200
             }
+    
+    def extract_text(self, file_content: bytes, content_type: str, filename: str) -> str:
+        # Detect mime type if not provided or too generic
+        if not content_type or content_type == "application/octet-stream":
+            try:
+                content_type = magic.from_buffer(file_content, mime=True)
+            except:
+                pass
+        
+        file_ext = Path(filename).suffix.lower()
+        category = MimeTypeMapper.get_category(content_type)
+        
+        try:
+            # PDF extraction
+            if category == "pdf" or content_type == "application/pdf" or filename.lower().endswith(".pdf"):
+                try:
+                    doc = fitz.open(stream=file_content, filetype="pdf")
+                    text = ""
+                    for page_num, page in enumerate(doc):
+                        page_text = page.get_text()
+                        if not page_text.strip() and page.get_images():
+                            # OCR for scanned PDFs
+                            pix = page.get_pixmap()
+                            img_data = pix.tobytes("png")
+                            image = Image.open(io.BytesIO(img_data))
+                            page_text = pytesseract.image_to_string(image)
+                        text += page_text + "\n"
+                    doc.close()
+                    return text.strip()
+                except Exception as e:
+                    logger.error(f"PDF extraction error: {e}")
+                    # Fallback to PyPDF2
+                    try:
+                        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_content))
+                        text = ""
+                        for page in pdf_reader.pages:
+                            page_text = page.extract_text()
+                            if page_text:
+                                text += page_text + "\n"
+                        return text.strip()
+                    except:
+                        return ""
+            
+            # Image extraction with OCR
+            elif category == "image" or content_type.startswith("image/"):
+                try:
+                    image = Image.open(io.BytesIO(file_content))
+                    text = pytesseract.image_to_string(image)
+                    return text.strip()
+                except Exception as e:
+                    logger.error(f"Image OCR error: {e}")
+                    return ""
+            
+            # Word processing documents
+            elif category == "word_processing":
+                # DOCX files
+                if "openxmlformats" in content_type or filename.lower().endswith(".docx"):
+                    try:
+                        doc = Document(io.BytesIO(file_content))
+                        text = "\n".join([para.text for para in doc.paragraphs])
+                        return text.strip()
+                    except Exception as e:
+                        logger.error(f"DOCX extraction error: {e}")
+                
+                # Legacy DOC files
+                elif content_type == "application/msword" or filename.lower().endswith(".doc"):
+                    try:
+                        # Try to read as DOCX first (some .doc files are actually DOCX)
+                        if file_content[:2] == b'PK':
+                            doc = Document(io.BytesIO(file_content))
+                            return "\n".join([para.text for para in doc.paragraphs])
+                        else:
+                            return "[Legacy DOC file - text extraction limited]"
+                    except:
+                        return "[Legacy DOC file - text extraction limited]"
+                
+                # RTF files
+                elif "rtf" in content_type or filename.lower().endswith(".rtf"):
+                    try:
+                        rtf_text = file_content.decode('cp1252', errors='ignore')
+                        text = striprtf.rtf_to_text(rtf_text)
+                        return text.strip()
+                    except:
+                        return ""
+                
+                return ""
+            
+            # Spreadsheets
+            elif category == "spreadsheet":
+                # Excel files
+                if "openxmlformats" in content_type or filename.lower().endswith(".xlsx") or filename.lower().endswith(".xls"):
+                    try:
+                        workbook = openpyxl.load_workbook(io.BytesIO(file_content), data_only=True)
+                        all_text = []
+                        for sheet_name in workbook.sheetnames:
+                            sheet = workbook[sheet_name]
+                            for row in sheet.iter_rows(values_only=True):
+                                row_values = [str(cell) if cell is not None else "" for cell in row]
+                                all_text.append(" ".join(row_values))
+                        return "\n".join(all_text)
+                    except Exception as e:
+                        logger.error(f"Excel extraction error: {e}")
+                
+                # CSV files
+                elif "csv" in content_type or filename.lower().endswith(".csv"):
+                    try:
+                        text_content = file_content.decode('utf-8', errors='ignore')
+                        csv_reader = csv.reader(io.StringIO(text_content))
+                        rows = list(csv_reader)
+                        text = "\n".join([" ".join(row) for row in rows])
+                        return text.strip()
+                    except:
+                        return ""
+                
+                return ""
+            
+            # Presentations - ENHANCED with better PPTX support
+            elif category == "presentation" or "presentation" in content_type or filename.lower().endswith(".pptx") or filename.lower().endswith(".ppt"):
+                try:
+                    prs = Presentation(io.BytesIO(file_content))
+                    text = ""
+                    slide_count = 0
+                    
+                    for slide in prs.slides:
+                        slide_count += 1
+                        slide_text = []
+                        
+                        # Extract text from shapes
+                        for shape in slide.shapes:
+                            if hasattr(shape, "text") and shape.text:
+                                slide_text.append(shape.text.strip())
+                            
+                            # Extract text from tables
+                            if hasattr(shape, "table"):
+                                for row in shape.table.rows:
+                                    row_text = []
+                                    for cell in row.cells:
+                                        if cell.text:
+                                            row_text.append(cell.text.strip())
+                                    if row_text:
+                                        slide_text.append(" | ".join(row_text))
+                            
+                            # Extract text from notes
+                            if hasattr(shape, "notes_slide") and shape.notes_slide:
+                                if shape.notes_slide.notes_text_frame and shape.notes_slide.notes_text_frame.text:
+                                    slide_text.append(f"[Notes: {shape.notes_slide.notes_text_frame.text.strip()}]")
+                        
+                        # Add slide header
+                        if slide_text:
+                            text += f"\n--- Slide {slide_count} ---\n"
+                            text += "\n".join(slide_text) + "\n"
+                    
+                    # Extract speaker notes
+                    try:
+                        if hasattr(prs, "slide_master") and prs.slide_master:
+                            notes_slides = [slide for slide in prs.slides if hasattr(slide, "has_notes_slide") and slide.has_notes_slide]
+                            if notes_slides:
+                                text += "\n--- Speaker Notes ---\n"
+                                for i, slide in enumerate(notes_slides, 1):
+                                    if slide.notes_slide and slide.notes_slide.notes_text_frame:
+                                        notes_text = slide.notes_slide.notes_text_frame.text
+                                        if notes_text:
+                                            text += f"Slide {i}: {notes_text}\n"
+                    except:
+                        pass
+                    
+                    return text.strip() if text else "[PowerPoint presentation - no text content found]"
+                    
+                except Exception as e:
+                    logger.error(f"PowerPoint extraction error: {e}")
+                    return f"[PowerPoint file - extraction failed: {str(e)}]"
+            
+            # Text files
+            elif category == "text" or content_type.startswith("text/"):
+                try:
+                    # Try different encodings
+                    for encoding in ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            text = file_content.decode(encoding)
+                            return text.strip()
+                        except UnicodeDecodeError:
+                            continue
+                    text = file_content.decode('utf-8', errors='ignore')
+                    return text.strip()
+                except:
+                    return ""
+            
+            # Archives - extract file listing
+            elif category == "archive":
+                try:
+                    if "zip" in content_type or filename.lower().endswith(".zip"):
+                        with zipfile.ZipFile(io.BytesIO(file_content)) as zf:
+                            file_list = zf.namelist()
+                            return "Archive contents:\n" + "\n".join(file_list)
+                    elif "tar" in content_type or filename.lower().endswith((".tar", ".tar.gz", ".tgz")):
+                        with tarfile.open(fileobj=io.BytesIO(file_content)) as tf:
+                            file_list = tf.getnames()
+                            return "Archive contents:\n" + "\n".join(file_list)
+                except:
+                    pass
+                return "[Archive file - cannot extract contents]"
+            
+            # XML files - ENHANCED XML extraction
+            elif category == "text" and (content_type == "application/xml" or filename.lower().endswith(".xml")):
+                try:
+                    # Parse XML and extract text content
+                    xml_str = file_content.decode('utf-8', errors='ignore')
+                    root = ET.fromstring(xml_str)
+                    
+                    # Recursive function to extract all text from XML
+                    def extract_xml_text(element):
+                        texts = []
+                        if element.text and element.text.strip():
+                            texts.append(element.text.strip())
+                        for child in element:
+                            texts.extend(extract_xml_text(child))
+                            if child.tail and child.tail.strip():
+                                texts.append(child.tail.strip())
+                        return texts
+                    
+                    all_texts = extract_xml_text(root)
+                    full_text = "\n".join(all_texts)
+                    
+                    # Add metadata about XML structure
+                    root_tag = root.tag
+                    element_count = len(list(root.iter()))
+                    
+                    xml_info = f"[XML Document: root={root_tag}, elements={element_count}]\n\n"
+                    
+                    return xml_info + full_text if full_text else f"[XML Document: {root_tag} - no text content]"
+                    
+                except Exception as e:
+                    logger.error(f"XML extraction error: {e}")
+                    # Fallback: try to extract as text
+                    try:
+                        text = file_content.decode('utf-8', errors='ignore')
+                        # If it looks like XML, return first part
+                        if text.strip().startswith('<') and '>' in text:
+                            return f"[XML Document - extraction limited]\n\n{text[:2000]}"
+                        return text.strip()
+                    except:
+                        return f"[XML file - extraction failed: {str(e)}]"
+            
+            # JSON files - ENHANCED JSON extraction
+            elif category == "text" and (content_type == "application/json" or filename.lower().endswith(".json")):
+                try:
+                    json_str = file_content.decode('utf-8', errors='ignore')
+                    data = json.loads(json_str)
+                    
+                    # Pretty print JSON with depth limit
+                    def extract_json_text(obj, depth=0, max_depth=5):
+                        if depth > max_depth:
+                            return ["[max depth reached]"]
+                        
+                        texts = []
+                        if isinstance(obj, dict):
+                            for key, value in obj.items():
+                                texts.append(f"{key}:")
+                                texts.extend(extract_json_text(value, depth + 1, max_depth))
+                        elif isinstance(obj, list):
+                            for i, item in enumerate(obj):
+                                texts.append(f"Item {i + 1}:")
+                                texts.extend(extract_json_text(item, depth + 1, max_depth))
+                        elif isinstance(obj, (str, int, float, bool)):
+                            texts.append(str(obj))
+                        return texts
+                    
+                    all_texts = extract_json_text(data)
+                    full_text = "\n".join(all_texts)
+                    
+                    # Add metadata about JSON structure
+                    json_info = f"[JSON Document: type={type(data).__name__}]\n\n"
+                    
+                    return json_info + full_text[:10000] if full_text else "[JSON file - empty content]"
+                    
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON extraction error: {e}")
+                    # Fallback: try to extract as text
+                    try:
+                        text = file_content.decode('utf-8', errors='ignore')
+                        return f"[JSON file - parsing failed]\n\n{text[:2000]}"
+                    except:
+                        return f"[JSON file - extraction failed: {str(e)}]"
+                except Exception as e:
+                    logger.error(f"JSON extraction error: {e}")
+                    return f"[JSON file - extraction failed: {str(e)}]"
+            
+            # Emails
+            elif category == "email" or content_type == "message/rfc822" or filename.lower().endswith(".eml"):
+                try:
+                    # Parse the email message
+                    msg = BytesParser(policy=policy.default).parsebytes(file_content)
+                    
+                    # Extract email headers
+                    subject = msg.get('subject', 'No Subject')
+                    from_addr = msg.get('from', 'Unknown')
+                    to_addr = msg.get('to', 'Unknown')
+                    cc_addr = msg.get('cc', '')
+                    date = msg.get('date', 'Unknown Date')
+                    
+                    # Extract body text
+                    body_text = ""
+                    html_body = ""
+                    
+                    if msg.is_multipart():
+                        for part in msg.walk():
+                            content_type_part = part.get_content_type()
+                            content_disposition = str(part.get("Content-Disposition"))
+                            
+                            # Skip attachments
+                            if "attachment" in content_disposition:
+                                continue
+                            
+                            if content_type_part == "text/plain":
+                                try:
+                                    body_text = part.get_content()
+                                except:
+                                    body_text = part.get_payload(decode=True).decode('utf-8', errors='ignore')
+                            elif content_type_part == "text/html" and not body_text:
+                                try:
+                                    html_body = part.get_content()
+                                    # Convert HTML to text
+                                    soup = BeautifulSoup(html_body, 'html.parser')
+                                    body_text = soup.get_text()
+                                except:
+                                    pass
+                    else:
+                        # Not multipart - get the content directly
+                        content_type_part = msg.get_content_type()
+                        if content_type_part == "text/plain":
+                            try:
+                                body_text = msg.get_content()
+                            except:
+                                body_text = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+                        elif content_type_part == "text/html":
+                            try:
+                                html_body = msg.get_content()
+                                soup = BeautifulSoup(html_body, 'html.parser')
+                                body_text = soup.get_text()
+                            except:
+                                body_text = msg.get_payload(decode=True).decode('utf-8', errors='ignore')
+                    
+                    # Clean up body text
+                    if body_text:
+                        # Remove excessive whitespace
+                        body_text = re.sub(r'\s+', ' ', body_text)
+                        body_text = body_text.strip()
+                    
+                    # Construct the email text representation
+                    email_text = f"Subject: {subject}\n"
+                    email_text += f"From: {from_addr}\n"
+                    email_text += f"To: {to_addr}\n"
+                    if cc_addr:
+                        email_text += f"Cc: {cc_addr}\n"
+                    email_text += f"Date: {date}\n\n"
+                    email_text += f"Body:\n{body_text}"
+                    
+                    return email_text.strip()
+                    
+                except Exception as e:
+                    logger.error(f"Email extraction error: {e}")
+                    return f"[Email file - extraction failed: {str(e)}]"
+            
+            # Ebooks
+            elif category == "ebook" or filename.lower().endswith(".epub"):
+                try:
+                    # Read the EPUB file
+                    book = epub.read_epub(io.BytesIO(file_content))
+                    
+                    # Extract metadata
+                    title = book.get_metadata('DC', 'title')
+                    creator = book.get_metadata('DC', 'creator')
+                    language = book.get_metadata('DC', 'language')
+                    
+                    # Extract text content from all documents
+                    text_items = []
+                    for item in book.get_items():
+                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
+                            try:
+                                content = item.get_content()
+                                # Parse HTML content
+                                soup = BeautifulSoup(content, 'html.parser')
+                                
+                                # Remove script and style elements
+                                for script in soup(["script", "style"]):
+                                    script.decompose()
+                                
+                                # Get text
+                                text = soup.get_text()
+                                
+                                # Clean up text
+                                lines = (line.strip() for line in text.splitlines())
+                                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                                text = '\n'.join(chunk for chunk in chunks if chunk)
+                                
+                                if text:
+                                    text_items.append(text)
+                            except Exception as e:
+                                logger.warning(f"Error processing EPUB item: {e}")
+                                continue
+                    
+                    # Combine all text
+                    full_text = "\n\n".join(text_items)
+                    
+                    # Add metadata header
+                    metadata_str = ""
+                    if title:
+                        metadata_str += f"Title: {title[0] if isinstance(title, list) else title}\n"
+                    if creator:
+                        metadata_str += f"Author: {creator[0] if isinstance(creator, list) else creator}\n"
+                    if language:
+                        metadata_str += f"Language: {language[0] if isinstance(language, list) else language}\n"
+                    
+                    if metadata_str:
+                        full_text = metadata_str + "\n" + full_text
+                    
+                    # Limit size for performance
+                    if len(full_text) > 50000:
+                        full_text = full_text[:50000] + "\n...[Content truncated]..."
+                    
+                    return full_text.strip() if full_text else "[eBook file - no text content found]"
+                    
+                except Exception as e:
+                    logger.error(f"eBook extraction error: {e}")
+                    return f"[eBook file - extraction failed: {str(e)}]"
+            
+            # Audio files - metadata only
+            elif category == "audio":
+                try:
+                    import mutagen
+                    audio = mutagen.File(io.BytesIO(file_content))
+                    if audio:
+                        length = audio.info.length if hasattr(audio.info, 'length') else None
+                        return f"Audio file - Length: {length} seconds" if length else "[Audio file]"
+                except:
+                    pass
+                return "[Audio file - metadata extraction not supported]"
+            
+            # Video files - metadata only
+            elif category == "video":
+                try:
+                    import av
+                    container = av.open(io.BytesIO(file_content))
+                    duration = float(container.duration) / av.time_base if container.duration else None
+                    return f"Video file - Duration: {duration} seconds" if duration else "[Video file]"
+                except:
+                    pass
+                return "[Video file - metadata extraction not supported]"
+            
+            # Unknown types - try to extract readable text
+            else:
+                # Try to extract any readable text
+                try:
+                    sample_text = file_content[:5000].decode('utf-8', errors='ignore')
+                    readable_chars = sum(c.isprintable() for c in sample_text) / len(sample_text) if sample_text else 0
+                    if readable_chars > 0.7:
+                        return sample_text[:2000]  # Return first 2000 chars of readable text
+                except:
+                    pass
+                return f"[{content_type} file - text extraction not supported]"
+                
+        except Exception as e:
+            logger.error(f"Extraction error for {filename}: {e}")
+            return ""
     
     def _clean_text(self, text: str) -> str:
         """Clean text before processing"""
@@ -3349,7 +3905,7 @@ async def create_document(
         await f.write(file_content)
     
     # Extract text
-    extracted_text = extract_text(file_content, file.content_type, file.filename)
+    extracted_text = summarizer.extract_text(file_content, file.content_type, file.filename)
     
     tags_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else []
     
@@ -3862,7 +4418,7 @@ async def checkin_document(
         async with aiofiles.open(storage_path, 'wb') as f:
             await f.write(file_content)
         
-        extracted_text = extract_text(file_content, file.content_type, file.filename)
+        extracted_text = summarizer.extract_text(file_content, file.content_type, file.filename)
         
         version = {
             "version_number": new_version,
@@ -4024,7 +4580,7 @@ async def add_document_version(
     async with aiofiles.open(storage_path, 'wb') as f:
         await f.write(file_content)
     
-    extracted_text = extract_text(file_content, file.content_type, file.filename)
+    extracted_text = summarizer.extract_text(file_content, file.content_type, file.filename)
     
     version = {
         "version_number": new_version,
@@ -4160,7 +4716,7 @@ async def bulk_upload_documents(
                 await f.write(file_content)
             
             # Extract text
-            extracted_text = extract_text(file_content, file.content_type, file.filename)
+            extracted_text = summarizer.extract_text(file_content, file.content_type, file.filename)
             
             version = {
                 "version_number": 1,

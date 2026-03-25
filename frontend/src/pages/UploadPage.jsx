@@ -16,149 +16,276 @@ import {
   SelectValue,
 } from "../components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
-import { Upload, FileText, X, CheckCircle, Files, FolderOpen, Folder, Loader2 } from "lucide-react";
+import { 
+  Upload, FileText, X, CheckCircle, Files, FolderOpen, Folder, Loader2,
+  Image, File, FileSpreadsheet, FileCode, Archive, Music, Video, Database
+} from "lucide-react";
 import { toast } from "sonner";
 
-// Helper function to extract text from file for analysis
-const extractTextForAnalysis = async (file) => {
+// File type icons mapping
+const getFileIcon = (mimeType, category) => {
+  if (category === "image") return <Image className="w-4 h-4 text-blue-500" />;
+  if (category === "spreadsheet") return <FileSpreadsheet className="w-4 h-4 text-green-500" />;
+  if (category === "pdf") return <FileText className="w-4 h-4 text-red-500" />;
+  if (category === "word_processing") return <FileText className="w-4 h-4 text-blue-600" />;
+  if (category === "presentation") return <FileText className="w-4 h-4 text-orange-500" />;
+  if (category === "archive") return <Archive className="w-4 h-4 text-yellow-600" />;
+  if (category === "text") return <FileCode className="w-4 h-4 text-gray-500" />;
+  if (category === "audio") return <Music className="w-4 h-4 text-purple-500" />;
+  if (category === "video") return <Video className="w-4 h-4 text-pink-500" />;
+  if (category === "database") return <Database className="w-4 h-4 text-indigo-500" />;
+  return <File className="w-4 h-4 text-gray-400" />;
+};
+
+// Extended document types based on backend categories
+const DOCUMENT_CATEGORIES = {
+  word_processing: { label: "Document", color: "text-blue-600", bg: "bg-blue-50" },
+  spreadsheet: { label: "Spreadsheet", color: "text-green-600", bg: "bg-green-50" },
+  presentation: { label: "Presentation", color: "text-orange-600", bg: "bg-orange-50" },
+  pdf: { label: "PDF", color: "text-red-600", bg: "bg-red-50" },
+  image: { label: "Image", color: "text-blue-500", bg: "bg-blue-50" },
+  text: { label: "Text", color: "text-gray-600", bg: "bg-gray-50" },
+  archive: { label: "Archive", color: "text-yellow-600", bg: "bg-yellow-50" },
+  email: { label: "Email", color: "text-indigo-600", bg: "bg-indigo-50" },
+  database: { label: "Database", color: "text-purple-600", bg: "bg-purple-50" },
+  cad: { label: "CAD", color: "text-cyan-600", bg: "bg-cyan-50" },
+  ebook: { label: "eBook", color: "text-pink-600", bg: "bg-pink-50" },
+  audio: { label: "Audio", color: "text-purple-600", bg: "bg-purple-50" },
+  video: { label: "Video", color: "text-pink-600", bg: "bg-pink-50" },
+  unknown: { label: "Unknown", color: "text-gray-400", bg: "bg-gray-100" }
+};
+
+// Enhanced file analysis with backend-like detection
+const analyzeFileContent = async (file) => {
   return new Promise((resolve, reject) => {
-    // For PDF files
-    if (file.type === 'application/pdf') {
-      // Note: In a real implementation, you would use a PDF parser like pdf-parse
-      // For now, we'll extract from filename and limited content
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        // This is a simplified version - in production you'd use a proper PDF parser
-        resolve({
-          filename: file.name.toLowerCase(),
-          content: e.target.result ? e.target.result.toString().substring(0, 5000) : ''
-        });
-      };
-      reader.readAsArrayBuffer(file);
-    } 
-    // For text files
-    else if (file.type === 'text/plain' || file.name.endsWith('.txt')) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        resolve({
-          filename: file.name.toLowerCase(),
-          content: e.target.result ? e.target.result.toString().substring(0, 5000) : ''
-        });
-      };
-      reader.readAsText(file);
-    }
-    // For DOCX files
-    else if (file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        // Note: In production, use mammoth.js or similar to extract text from DOCX
-        resolve({
-          filename: file.name.toLowerCase(),
-          content: file.name // Fallback to filename for DOCX
-        });
-      };
-      reader.readAsArrayBuffer(file);
-    }
-    // For images (OCR would be needed in production)
-    else if (file.type.startsWith('image/')) {
+    const reader = new FileReader();
+    
+    reader.onload = async (e) => {
+      const arrayBuffer = e.target.result;
+      const bytes = new Uint8Array(arrayBuffer);
+      
+      // Detect mime type from magic bytes (simplified client-side detection)
+      let mimeType = file.type;
+      let category = "unknown";
+      
+      // PDF detection
+      if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+        mimeType = "application/pdf";
+        category = "pdf";
+      }
+      // PNG
+      else if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+        mimeType = "image/png";
+        category = "image";
+      }
+      // JPEG
+      else if (bytes[0] === 0xFF && bytes[1] === 0xD8) {
+        mimeType = "image/jpeg";
+        category = "image";
+      }
+      // ZIP/DOCX/XLSX/PPTX
+      else if (bytes[0] === 0x50 && bytes[1] === 0x4B) {
+        if (file.name.endsWith('.docx')) {
+          category = "word_processing";
+        } else if (file.name.endsWith('.xlsx')) {
+          category = "spreadsheet";
+        } else if (file.name.endsWith('.pptx')) {
+          category = "presentation";
+        } else {
+          category = "archive";
+        }
+      }
+      // Text files
+      else if (file.type.startsWith('text/') || file.name.endsWith('.txt') || file.name.endsWith('.md')) {
+        category = "text";
+      }
+      // Audio
+      else if (file.type.startsWith('audio/')) {
+        category = "audio";
+      }
+      // Video
+      else if (file.type.startsWith('video/')) {
+        category = "video";
+      }
+      // JSON
+      else if (file.name.endsWith('.json')) {
+        category = "text";
+        mimeType = "application/json";
+      }
+      // XML
+      else if (file.name.endsWith('.xml')) {
+        category = "text";
+        mimeType = "application/xml";
+      }
+      // CSV
+      else if (file.name.endsWith('.csv')) {
+        category = "spreadsheet";
+        mimeType = "text/csv";
+      }
+      
+      // Extract text content for analysis (for text-based files)
+      let textContent = "";
+      if (category === "text" || file.type.startsWith('text/')) {
+        try {
+          const decoder = new TextDecoder('utf-8');
+          textContent = decoder.decode(arrayBuffer).substring(0, 5000);
+        } catch (error) {
+          console.error("Error decoding text:", error);
+        }
+      } else {
+        // For binary files, use filename only
+        textContent = file.name;
+      }
+      
       resolve({
         filename: file.name.toLowerCase(),
-        content: file.name // Fallback to filename
+        content: textContent,
+        mimeType,
+        category
       });
-    }
-    else {
-      resolve({
-        filename: file.name.toLowerCase(),
-        content: ''
-      });
-    }
+    };
+    
+    reader.onerror = reject;
+    reader.readAsArrayBuffer(file);
   });
 };
 
-// AI-powered document type detection
-const detectDocumentType = (filename, content = '') => {
-  const financeKeywords = [
-    'invoice', 'receipt', 'financial', 'statement', 'balance', 'sheet',
-    'income', 'expense', 'budget', 'tax', 'payment', 'bank', 'transaction',
-    'quarterly', 'annual', 'report', 'earnings', 'revenue', 'profit', 'loss',
-    'audit', 'accounting', 'ledger', 'payroll'
-  ];
-
-  const complianceKeywords = [
-    'compliance', 'policy', 'regulation', 'legal', 'contract', 'agreement',
-    'terms', 'conditions', 'gdpr', 'hipaa', 'sarbanes-oxley', 'sox',
-    'regulatory', 'requirement', 'standard', 'procedure', 'guideline',
-    'framework', 'certification', 'audit', 'checklist', 'risk', 'assessment'
-  ];
-
-  const meetingKeywords = [
-    'meeting', 'minutes', 'agenda', 'memo', 'notes', 'discussion',
-    'action items', 'follow-up', 'summary', 'recap', 'attendees',
-    'presentation', 'slides', 'deck', 'workshop', 'conference', 'call'
-  ];
-
-  // Combine filename and content for analysis
+// Enhanced document type detection with more categories
+const detectDocumentType = (filename, content = '', category = '') => {
   const textToAnalyze = (filename + ' ' + content).toLowerCase();
   
-  let financeScore = 0;
-  let complianceScore = 0;
-  let meetingScore = 0;
-
+  const keywordGroups = {
+    finance: {
+      keywords: [
+        'invoice', 'receipt', 'financial', 'statement', 'balance', 'sheet',
+        'income', 'expense', 'budget', 'tax', 'payment', 'bank', 'transaction',
+        'quarterly', 'annual', 'report', 'earnings', 'revenue', 'profit', 'loss',
+        'audit', 'accounting', 'ledger', 'payroll', '10-k', '10-q', 'sec filing'
+      ],
+      score: 0
+    },
+    compliance: {
+      keywords: [
+        'compliance', 'policy', 'regulation', 'legal', 'contract', 'agreement',
+        'terms', 'conditions', 'gdpr', 'hipaa', 'sarbanes-oxley', 'sox',
+        'regulatory', 'requirement', 'standard', 'procedure', 'guideline',
+        'framework', 'certification', 'risk', 'assessment', 'non-disclosure', 'nda'
+      ],
+      score: 0
+    },
+    meeting: {
+      keywords: [
+        'meeting', 'minutes', 'agenda', 'memo', 'notes', 'discussion',
+        'action items', 'follow-up', 'summary', 'recap', 'attendees',
+        'presentation', 'slides', 'deck', 'workshop', 'conference', 'call',
+        'board meeting', 'steering committee', 'team sync'
+      ],
+      score: 0
+    },
+    technical: {
+      keywords: [
+        'specification', 'technical', 'api', 'documentation', 'guide',
+        'manual', 'installation', 'configuration', 'developer', 'code',
+        'architecture', 'design', 'protocol', 'standard', 'reference'
+      ],
+      score: 0
+    },
+    hr: {
+      keywords: [
+        'resume', 'cv', 'job description', 'interview', 'employee',
+        'onboarding', 'performance review', 'evaluation', 'hiring',
+        'recruitment', 'offer letter', 'contractor', 'timesheet'
+      ],
+      score: 0
+    },
+    marketing: {
+      keywords: [
+        'marketing', 'campaign', 'advertising', 'brand', 'social media',
+        'content', 'newsletter', 'press release', 'blog', 'seo',
+        'analytics', 'market research', 'customer feedback'
+      ],
+      score: 0
+    }
+  };
+  
   // Score based on keywords
-  financeKeywords.forEach(keyword => {
-    if (textToAnalyze.includes(keyword)) financeScore++;
-  });
-
-  complianceKeywords.forEach(keyword => {
-    if (textToAnalyze.includes(keyword)) complianceScore++;
-  });
-
-  meetingKeywords.forEach(keyword => {
-    if (textToAnalyze.includes(keyword)) meetingScore++;
-  });
-
-  // Additional heuristics based on filename patterns
-  if (filename.includes('minutes') || filename.includes('agenda')) {
-    meetingScore += 3;
+  for (const [type, group] of Object.entries(keywordGroups)) {
+    for (const keyword of group.keywords) {
+      if (textToAnalyze.includes(keyword)) {
+        group.score += 1;
+        // Bonus for exact matches
+        if (textToAnalyze.includes(` ${keyword} `)) {
+          group.score += 1;
+        }
+      }
+    }
   }
-  if (filename.includes('invoice') || filename.includes('receipt')) {
-    financeScore += 3;
+  
+  // Bonus based on file category
+  if (category === 'spreadsheet') {
+    keywordGroups.finance.score += 2;
   }
-  if (filename.includes('contract') || filename.includes('agreement')) {
-    complianceScore += 3;
+  if (category === 'presentation') {
+    keywordGroups.meeting.score += 2;
   }
-
-  // Determine the highest score
-  const scores = [
-    { type: 'finance', score: financeScore },
-    { type: 'compliance', score: complianceScore },
-    { type: 'meeting', score: meetingScore }
-  ];
-
-  scores.sort((a, b) => b.score - a.score);
-
-  // Only return a type if there's a clear winner (score > 0)
-  if (scores[0].score > 0) {
-    return scores[0].type;
+  if (category === 'text') {
+    keywordGroups.technical.score += 1;
   }
-
-  return null;
+  
+  // Bonus based on filename patterns
+  const filenameLower = filename.toLowerCase();
+  if (filenameLower.includes('minutes') || filenameLower.includes('agenda')) {
+    keywordGroups.meeting.score += 3;
+  }
+  if (filenameLower.includes('invoice') || filenameLower.includes('receipt')) {
+    keywordGroups.finance.score += 3;
+  }
+  if (filenameLower.includes('contract') || filenameLower.includes('agreement')) {
+    keywordGroups.compliance.score += 3;
+  }
+  if (filenameLower.includes('spec') || filenameLower.includes('api')) {
+    keywordGroups.technical.score += 3;
+  }
+  if (filenameLower.includes('resume') || filenameLower.includes('cv')) {
+    keywordGroups.hr.score += 3;
+  }
+  if (filenameLower.includes('campaign') || filenameLower.includes('marketing')) {
+    keywordGroups.marketing.score += 3;
+  }
+  
+  // Find highest score
+  let bestType = null;
+  let bestScore = 2; // Minimum threshold
+  
+  for (const [type, group] of Object.entries(keywordGroups)) {
+    if (group.score > bestScore) {
+      bestScore = group.score;
+      bestType = type;
+    }
+  }
+  
+  return bestType;
 };
 
-// Function to update tags with detected document type
+// Update tags with detected document type
 const updateTagsWithDocumentType = (currentTags, documentType) => {
   if (!documentType) return currentTags;
   
-  // Remove existing document type tags
   const tagList = currentTags.split(',').map(tag => tag.trim()).filter(tag => tag);
   const filteredTags = tagList.filter(tag => 
-    !['finance', 'compliance', 'meeting'].includes(tag.toLowerCase())
+    !['finance', 'compliance', 'meeting', 'technical', 'hr', 'marketing'].includes(tag.toLowerCase())
   );
   
-  // Add new document type tag
-  filteredTags.push(documentType);
+  if (!filteredTags.includes(documentType)) {
+    filteredTags.push(documentType);
+  }
   
   return filteredTags.join(', ');
+};
+
+// Get category display info
+const getCategoryDisplay = (category) => {
+  return DOCUMENT_CATEGORIES[category] || DOCUMENT_CATEGORIES.unknown;
 };
 
 export default function UploadPage() {
@@ -172,6 +299,7 @@ export default function UploadPage() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [detectingType, setDetectingType] = useState(false);
+  const [analyzingFiles, setAnalyzingFiles] = useState(false);
   const folderInputRef = useRef(null);
   
   const [formData, setFormData] = useState({
@@ -209,15 +337,22 @@ export default function UploadPage() {
     fetchGroups();
   }, [token]);
 
-  // Detect document type when file is selected
+  // Analyze single file when selected
   useEffect(() => {
-    const detectAndUpdateTags = async () => {
+    const analyzeSingleFile = async () => {
       if (!file) return;
       
       setDetectingType(true);
       try {
-        const { filename, content } = await extractTextForAnalysis(file);
-        const documentType = detectDocumentType(filename, content);
+        const analysis = await analyzeFileContent(file.file);
+        const documentType = detectDocumentType(analysis.filename, analysis.content, analysis.category);
+        
+        setFile(prev => prev ? {
+          ...prev,
+          analysis,
+          documentType,
+          category: analysis.category
+        } : null);
         
         if (documentType) {
           setFormData(prev => ({
@@ -225,66 +360,164 @@ export default function UploadPage() {
             tags: updateTagsWithDocumentType(prev.tags, documentType)
           }));
           
-          // Show notification about detected type
-          toast.info(`Detected as ${documentType} document`);
+          const categoryInfo = getCategoryDisplay(analysis.category);
+          toast.info(`Detected as ${documentType} document (${categoryInfo.label})`);
+        } else if (analysis.category !== 'unknown') {
+          const categoryInfo = getCategoryDisplay(analysis.category);
+          toast.info(`Detected as ${categoryInfo.label} file`);
         }
       } catch (error) {
-        console.error("Error detecting document type:", error);
+        console.error("Error analyzing file:", error);
+        toast.error("Error detecting document type");
       } finally {
         setDetectingType(false);
       }
     };
     
-    detectAndUpdateTags();
+    analyzeSingleFile();
   }, [file]);
 
-  // Detect document types for bulk files
+  // Analyze bulk files
   useEffect(() => {
-    const detectBulkDocumentTypes = async () => {
-      if (bulkFiles.length === 0) return;
+    const analyzeBulkFiles = async () => {
+      if (bulkFiles.length === 0 || analyzingFiles) return;
       
-      // For bulk uploads, we'll detect the most common type among files
-      let financeCount = 0;
-      let complianceCount = 0;
-      let meetingCount = 0;
+      setAnalyzingFiles(true);
+      const analyzed = [];
+      const typeCounts = {};
       
-      // Sample a few files for detection
-      const sampleFiles = bulkFiles.slice(0, 5); // Limit to 5 files for performance
+      // Analyze up to 10 files for performance
+      const filesToAnalyze = bulkFiles.slice(0, 10);
       
-      for (const sampleFile of sampleFiles) {
-        try {
-          const { filename, content } = await extractTextForAnalysis(sampleFile);
-          const documentType = detectDocumentType(filename, content);
-          
-          if (documentType === 'finance') financeCount++;
-          else if (documentType === 'compliance') complianceCount++;
-          else if (documentType === 'meeting') meetingCount++;
-        } catch (error) {
-          console.error("Error detecting document type:", error);
+      for (const uploadedFile of filesToAnalyze) {
+        if (!uploadedFile.analysis) {
+          try {
+            const analysis = await analyzeFileContent(uploadedFile.file);
+            const documentType = detectDocumentType(analysis.filename, analysis.content, analysis.category);
+            
+            analyzed.push({
+              ...uploadedFile,
+              analysis,
+              documentType,
+              category: analysis.category
+            });
+            
+            if (documentType) {
+              typeCounts[documentType] = (typeCounts[documentType] || 0) + 1;
+            }
+          } catch (error) {
+            console.error("Error analyzing file:", error);
+            analyzed.push(uploadedFile);
+          }
+        } else {
+          analyzed.push(uploadedFile);
+          if (uploadedFile.documentType) {
+            typeCounts[uploadedFile.documentType] = (typeCounts[uploadedFile.documentType] || 0) + 1;
+          }
         }
       }
       
-      // Determine the most common type
-      if (financeCount > 0 || complianceCount > 0 || meetingCount > 0) {
-        let detectedType = null;
-        if (financeCount >= complianceCount && financeCount >= meetingCount) detectedType = 'finance';
-        else if (complianceCount >= financeCount && complianceCount >= meetingCount) detectedType = 'compliance';
-        else detectedType = 'meeting';
-        
-        // Update bulk tags
+      // Update bulk files with analyzed data
+      const updatedFiles = bulkFiles.map(f => {
+        const analyzedFile = analyzed.find(a => a.file === f.file);
+        return analyzedFile || f;
+      });
+      setBulkFiles(updatedFiles);
+      
+      // Determine most common type
+      let mostCommonType = null;
+      let maxCount = 0;
+      for (const [type, count] of Object.entries(typeCounts)) {
+        if (count > maxCount) {
+          maxCount = count;
+          mostCommonType = type;
+        }
+      }
+      
+      if (mostCommonType && maxCount >= 2) {
         setBulkFormData(prev => ({
           ...prev,
-          tags: updateTagsWithDocumentType(prev.tags, detectedType)
+          tags: updateTagsWithDocumentType(prev.tags, mostCommonType)
         }));
-        
-        if (detectedType) {
-          toast.info(`Most files appear to be ${detectedType} documents`);
-        }
+        toast.info(`Most files appear to be ${mostCommonType} documents`);
       }
+      
+      setAnalyzingFiles(false);
     };
     
-    detectBulkDocumentTypes();
-  }, [bulkFiles]);
+    analyzeBulkFiles();
+  }, [bulkFiles.length]);
+
+  // Analyze folder files
+  useEffect(() => {
+    const analyzeFolderFiles = async () => {
+      if (folderFiles.length === 0 || analyzingFiles) return;
+      
+      setAnalyzingFiles(true);
+      const analyzed = [];
+      const typeCounts = {};
+      
+      // Analyze up to 10 files for performance
+      const filesToAnalyze = folderFiles.slice(0, 10);
+      
+      for (const uploadedFile of filesToAnalyze) {
+        if (!uploadedFile.analysis) {
+          try {
+            const analysis = await analyzeFileContent(uploadedFile.file);
+            const documentType = detectDocumentType(analysis.filename, analysis.content, analysis.category);
+            
+            analyzed.push({
+              ...uploadedFile,
+              analysis,
+              documentType,
+              category: analysis.category
+            });
+            
+            if (documentType) {
+              typeCounts[documentType] = (typeCounts[documentType] || 0) + 1;
+            }
+          } catch (error) {
+            console.error("Error analyzing file:", error);
+            analyzed.push(uploadedFile);
+          }
+        } else {
+          analyzed.push(uploadedFile);
+          if (uploadedFile.documentType) {
+            typeCounts[uploadedFile.documentType] = (typeCounts[uploadedFile.documentType] || 0) + 1;
+          }
+        }
+      }
+      
+      // Update folder files with analyzed data
+      const updatedFiles = folderFiles.map(f => {
+        const analyzedFile = analyzed.find(a => a.file === f.file);
+        return analyzedFile || f;
+      });
+      setFolderFiles(updatedFiles);
+      
+      // Determine most common type
+      let mostCommonType = null;
+      let maxCount = 0;
+      for (const [type, count] of Object.entries(typeCounts)) {
+        if (count > maxCount) {
+          maxCount = count;
+          mostCommonType = type;
+        }
+      }
+      
+      if (mostCommonType && maxCount >= 2) {
+        setFolderFormData(prev => ({
+          ...prev,
+          tags: updateTagsWithDocumentType(prev.tags, mostCommonType)
+        }));
+        toast.info(`Most files appear to be ${mostCommonType} documents`);
+      }
+      
+      setAnalyzingFiles(false);
+    };
+    
+    analyzeFolderFiles();
+  }, [folderFiles.length]);
 
   const handleDrop = (e, type = "single") => {
     e.preventDefault();
@@ -292,9 +525,9 @@ export default function UploadPage() {
     const droppedFiles = Array.from(e.dataTransfer.files);
     
     if (type === "bulk") {
-      setBulkFiles(prev => [...prev, ...droppedFiles]);
+      const newFiles = droppedFiles.map(file => ({ file, path: file.name }));
+      setBulkFiles(prev => [...prev, ...newFiles]);
     } else if (type === "folder") {
-      // Handle folder drop - extract files with paths
       const items = e.dataTransfer.items;
       if (items) {
         const filePromises = [];
@@ -309,12 +542,13 @@ export default function UploadPage() {
           setFolderFiles(prev => [...prev, ...allFiles]);
         });
       } else {
-        setFolderFiles(prev => [...prev, ...droppedFiles.map(f => ({ file: f, path: f.name }))]);
+        const newFiles = droppedFiles.map(file => ({ file, path: file.name }));
+        setFolderFiles(prev => [...prev, ...newFiles]);
       }
     } else {
       const droppedFile = droppedFiles[0];
       if (droppedFile) {
-        setFile(droppedFile);
+        setFile({ file: droppedFile, path: droppedFile.name });
         if (!formData.title) {
           setFormData(prev => ({ ...prev, title: droppedFile.name.replace(/\.[^/.]+$/, "") }));
         }
@@ -322,7 +556,6 @@ export default function UploadPage() {
     }
   };
 
-  // Recursively traverse folder structure
   const traverseFileTree = (item, path = "") => {
     return new Promise((resolve) => {
       if (item.isFile) {
@@ -339,6 +572,8 @@ export default function UploadPage() {
             resolve(results.flat());
           });
         });
+      } else {
+        resolve([]);
       }
     });
   };
@@ -346,7 +581,7 @@ export default function UploadPage() {
   const handleFileSelect = (e) => {
     const selectedFile = e.target.files?.[0];
     if (selectedFile) {
-      setFile(selectedFile);
+      setFile({ file: selectedFile, path: selectedFile.name });
       if (!formData.title) {
         setFormData(prev => ({ ...prev, title: selectedFile.name.replace(/\.[^/.]+$/, "") }));
       }
@@ -355,7 +590,8 @@ export default function UploadPage() {
 
   const handleBulkFileSelect = (e) => {
     const selectedFiles = Array.from(e.target.files || []);
-    setBulkFiles(prev => [...prev, ...selectedFiles]);
+    const newFiles = selectedFiles.map(file => ({ file, path: file.name }));
+    setBulkFiles(prev => [...prev, ...newFiles]);
   };
 
   const handleFolderSelect = (e) => {
@@ -375,7 +611,6 @@ export default function UploadPage() {
     setFolderFiles(prev => prev.filter((_, i) => i !== index));
   };
 
-  // Manually trigger document type detection
   const detectDocumentTypeManually = async () => {
     if (!file) {
       toast.error("Please select a file first");
@@ -384,10 +619,11 @@ export default function UploadPage() {
     
     setDetectingType(true);
     try {
-      const { filename, content } = await extractTextForAnalysis(file);
-      const documentType = detectDocumentType(filename, content);
+      const analysis = await analyzeFileContent(file.file);
+      const documentType = detectDocumentType(analysis.filename, analysis.content, analysis.category);
       
       if (documentType) {
+        setFile(prev => prev ? { ...prev, analysis, documentType, category: analysis.category } : null);
         setFormData(prev => ({
           ...prev,
           tags: updateTagsWithDocumentType(prev.tags, documentType)
@@ -419,7 +655,7 @@ export default function UploadPage() {
     setUploadProgress(0);
     try {
       const data = new FormData();
-      data.append("file", file);
+      data.append("file", file.file);
       data.append("title", formData.title);
       data.append("description", formData.description);
       data.append("visibility", formData.visibility);
@@ -432,8 +668,10 @@ export default function UploadPage() {
           "Content-Type": "multipart/form-data"
         },
         onUploadProgress: (progressEvent) => {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(progress);
+          if (progressEvent.total) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(progress);
+          }
         }
       });
 
@@ -458,7 +696,7 @@ export default function UploadPage() {
     setUploadProgress(0);
     try {
       const data = new FormData();
-      bulkFiles.forEach(file => {
+      bulkFiles.forEach(({ file }) => {
         data.append("files", file);
       });
       data.append("visibility", bulkFormData.visibility);
@@ -471,8 +709,10 @@ export default function UploadPage() {
           "Content-Type": "multipart/form-data"
         },
         onUploadProgress: (progressEvent) => {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(progress);
+          if (progressEvent.total) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(progress);
+          }
         }
       });
 
@@ -483,7 +723,7 @@ export default function UploadPage() {
       }
       if (failed > 0) {
         toast.error(`${failed} document(s) failed to upload`);
-        errors.forEach(err => {
+        errors.forEach((err) => {
           console.error(`Failed: ${err.filename} - ${err.error}`);
         });
       }
@@ -513,8 +753,8 @@ export default function UploadPage() {
       const data = new FormData();
       folderFiles.forEach(({ file, path }) => {
         data.append("files", file);
-        // If preserving path, add path info as tag
-        if (folderFormData.preservePath && path.includes("/")) {
+        // If preserving path, add path info as metadata
+        if (folderFormData.preservePath && path && path.includes("/")) {
           const folderPath = path.substring(0, path.lastIndexOf("/"));
           data.append("paths", folderPath);
         }
@@ -525,7 +765,7 @@ export default function UploadPage() {
       // Add folder path as tag if preserving structure
       let tags = folderFormData.tags;
       if (folderFormData.preservePath && folderFiles.length > 0) {
-        const rootFolder = folderFiles[0].path.split("/")[0];
+        const rootFolder = folderFiles[0].path?.split("/")[0] || "folder";
         tags = tags ? `${tags},folder:${rootFolder}` : `folder:${rootFolder}`;
       }
       data.append("tags", tags);
@@ -536,8 +776,10 @@ export default function UploadPage() {
           "Content-Type": "multipart/form-data"
         },
         onUploadProgress: (progressEvent) => {
-          const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(progress);
+          if (progressEvent.total) {
+            const progress = Math.round((progressEvent.loaded * 100) / progressEvent.total);
+            setUploadProgress(progress);
+          }
         }
       });
 
@@ -548,7 +790,7 @@ export default function UploadPage() {
       }
       if (failed > 0) {
         toast.error(`${failed} file(s) failed to upload`);
-        errors.forEach(err => {
+        errors.forEach((err) => {
           console.error(`Failed: ${err.filename} - ${err.error}`);
         });
       }
@@ -572,11 +814,46 @@ export default function UploadPage() {
     return (bytes / (1024 * 1024)).toFixed(1) + " MB";
   };
 
+  const renderFilePreview = (uploadedFile, showPath = false) => {
+    const categoryInfo = uploadedFile.category ? getCategoryDisplay(uploadedFile.category) : getCategoryDisplay("unknown");
+    
+    return (
+      <div className="flex items-center justify-between p-2 rounded bg-muted">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          {getFileIcon(uploadedFile.file.type, uploadedFile.category || "")}
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-medium truncate">{uploadedFile.file.name}</span>
+              {uploadedFile.documentType && (
+                <span className={`text-xs px-1.5 py-0.5 rounded ${categoryInfo.bg} ${categoryInfo.color}`}>
+                  {uploadedFile.documentType}
+                </span>
+              )}
+              {uploadedFile.category && uploadedFile.category !== 'unknown' && !uploadedFile.documentType && (
+                <span className={`text-xs px-1.5 py-0.5 rounded ${categoryInfo.bg} ${categoryInfo.color}`}>
+                  {categoryInfo.label}
+                </span>
+              )}
+            </div>
+            {showPath && uploadedFile.path && (
+              <span className="text-xs text-muted-foreground block truncate">{uploadedFile.path}</span>
+            )}
+            <span className="text-xs text-muted-foreground">
+              {formatFileSize(uploadedFile.file.size)}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-3xl mx-auto animate-fade-in">
       <div className="mb-8">
         <h1 className="text-2xl sm:text-3xl font-heading font-bold">Upload Documents</h1>
-        <p className="text-muted-foreground mt-1">Add documents to your library with AI-powered tagging</p>
+        <p className="text-muted-foreground mt-1">
+          Add documents to your library with AI-powered detection for all file types
+        </p>
       </div>
 
       <Tabs defaultValue="single">
@@ -607,21 +884,31 @@ export default function UploadPage() {
                   }`}
                   onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
                   onDragLeave={() => setDragOver(false)}
-                  onDrop={(e) => handleDrop(e, false)}
+                  onDrop={(e) => handleDrop(e, "single")}
                   data-testid="drop-zone"
                 >
                   {file ? (
                     <div className="flex items-center justify-center gap-4">
                       <div className="w-12 h-12 rounded bg-primary/5 flex items-center justify-center">
-                        <FileText className="w-6 h-6 text-primary" />
+                        {getFileIcon(file.file.type, file.category || "")}
                       </div>
-                      <div className="text-left">
-                        <p className="font-medium">{file.name}</p>
-                        <p className="text-sm text-muted-foreground">{formatFileSize(file.size)}</p>
+                      <div className="text-left flex-1">
+                        <p className="font-medium">{file.file.name}</p>
+                        <p className="text-sm text-muted-foreground">{formatFileSize(file.file.size)}</p>
+                        {file.documentType && (
+                          <p className="text-xs text-primary">
+                            Detected: {file.documentType}
+                          </p>
+                        )}
+                        {file.category && file.category !== 'unknown' && !file.documentType && (
+                          <p className="text-xs text-muted-foreground">
+                            Type: {getCategoryDisplay(file.category).label}
+                          </p>
+                        )}
                         {detectingType && (
                           <p className="text-xs text-primary flex items-center gap-1">
                             <Loader2 className="w-3 h-3 animate-spin" />
-                            Analyzing document type...
+                            Analyzing document...
                           </p>
                         )}
                       </div>
@@ -647,7 +934,7 @@ export default function UploadPage() {
                         data-testid="file-input"
                       />
                       <p className="text-xs text-muted-foreground">
-                        Supported: PDF, DOCX, TXT, Images (AI-powered tagging)
+                        Supports all document types: PDF, Word, Excel, PowerPoint, Images, Text, Archives, and more
                       </p>
                     </>
                   )}
@@ -752,13 +1039,36 @@ export default function UploadPage() {
                       value={formData.tags}
                       onChange={(e) => setFormData(prev => ({ ...prev, tags: e.target.value }))}
                       data-testid="tags-input"
-                      disabled
+                      disabled={detectingType}
                     />
                     {detectingType && (
                       <div className="absolute right-2 top-2">
                         <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
                       </div>
                     )}
+                  </div>
+                  <div className="flex flex-wrap gap-2 mt-2">
+                    {['finance', 'compliance', 'meeting', 'technical', 'hr', 'marketing'].map(type => (
+                      <Button
+                        key={type}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const currentTags = formData.tags.split(',').map(t => t.trim()).filter(t => t);
+                          if (!currentTags.includes(type)) {
+                            const newTags = [...currentTags, type].join(', ');
+                            setFormData(prev => ({ ...prev, tags: newTags }));
+                          } else {
+                            const newTags = currentTags.filter(t => t !== type).join(', ');
+                            setFormData(prev => ({ ...prev, tags: newTags }));
+                          }
+                        }}
+                        className={`text-xs ${formData.tags.toLowerCase().includes(type) ? 'bg-primary/10 border-primary text-primary' : ''}`}
+                      >
+                        {type.charAt(0).toUpperCase() + type.slice(1)}
+                      </Button>
+                    ))}
                   </div>
                 </div>
               </CardContent>
@@ -826,7 +1136,7 @@ export default function UploadPage() {
                     data-testid="bulk-file-input"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Select multiple files at once. AI will detect document types and suggest tags.
+                    Supports all document types. AI will detect document types and suggest tags.
                   </p>
                 </div>
 
@@ -834,7 +1144,15 @@ export default function UploadPage() {
                 {bulkFiles.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <div className="flex items-center justify-between">
-                      <p className="text-sm font-medium">{bulkFiles.length} file(s) selected</p>
+                      <p className="text-sm font-medium">
+                        {bulkFiles.length} file(s) selected
+                        {analyzingFiles && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            <Loader2 className="w-3 h-3 inline animate-spin mr-1" />
+                            Analyzing...
+                          </span>
+                        )}
+                      </p>
                       <Button 
                         type="button" 
                         variant="ghost" 
@@ -845,17 +1163,23 @@ export default function UploadPage() {
                       </Button>
                     </div>
                     <div className="max-h-48 overflow-y-auto space-y-1">
-                      {bulkFiles.map((file, index) => (
-                        <div 
-                          key={index}
-                          className="flex items-center justify-between p-2 rounded bg-muted"
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <FileText className="w-4 h-4 text-primary flex-shrink-0" />
-                            <span className="text-sm truncate">{file.name}</span>
-                            <span className="text-xs text-muted-foreground flex-shrink-0">
-                              {formatFileSize(file.size)}
-                            </span>
+                      {bulkFiles.map((uploadedFile, index) => (
+                        <div key={index} className="flex items-center justify-between p-2 rounded bg-muted">
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            {getFileIcon(uploadedFile.file.type, uploadedFile.category || "")}
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm truncate">{uploadedFile.file.name}</span>
+                                {uploadedFile.documentType && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                                    {uploadedFile.documentType}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs text-muted-foreground">
+                                {formatFileSize(uploadedFile.file.size)}
+                              </span>
+                            </div>
                           </div>
                           <Button
                             type="button"
@@ -929,51 +1253,27 @@ export default function UploadPage() {
                     data-testid="bulk-tags-input"
                   />
                   <div className="flex flex-wrap gap-2 mt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('finance')) {
-                          const newTags = [...currentTags, 'finance'].join(', ');
-                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('finance') ? 'bg-green-50 border-green-200 text-green-700' : ''}`}
-                    >
-                      Finance
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('compliance')) {
-                          const newTags = [...currentTags, 'compliance'].join(', ');
-                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('compliance') ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
-                    >
-                      Compliance
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('meeting')) {
-                          const newTags = [...currentTags, 'meeting'].join(', ');
-                          setBulkFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${bulkFormData.tags.toLowerCase().includes('meeting') ? 'bg-purple-50 border-purple-200 text-purple-700' : ''}`}
-                    >
-                      Meeting
-                    </Button>
+                    {['finance', 'compliance', 'meeting', 'technical', 'hr', 'marketing'].map(type => (
+                      <Button
+                        key={type}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const currentTags = bulkFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                          if (!currentTags.includes(type)) {
+                            const newTags = [...currentTags, type].join(', ');
+                            setBulkFormData(prev => ({ ...prev, tags: newTags }));
+                          } else {
+                            const newTags = currentTags.filter(t => t !== type).join(', ');
+                            setBulkFormData(prev => ({ ...prev, tags: newTags }));
+                          }
+                        }}
+                        className={`text-xs ${bulkFormData.tags.toLowerCase().includes(type) ? 'bg-primary/10 border-primary text-primary' : ''}`}
+                      >
+                        {type.charAt(0).toUpperCase() + type.slice(1)}
+                      </Button>
+                    ))}
                   </div>
                 </div>
               </CardContent>
@@ -1055,6 +1355,12 @@ export default function UploadPage() {
                       <p className="text-sm font-medium">
                         <Folder className="w-4 h-4 inline mr-2" />
                         {folderFiles.length} file(s) from folder
+                        {analyzingFiles && (
+                          <span className="ml-2 text-xs text-muted-foreground">
+                            <Loader2 className="w-3 h-3 inline animate-spin mr-1" />
+                            Analyzing...
+                          </span>
+                        )}
                       </p>
                       <Button 
                         type="button" 
@@ -1066,20 +1372,24 @@ export default function UploadPage() {
                       </Button>
                     </div>
                     <div className="max-h-64 overflow-y-auto space-y-1 border rounded p-2">
-                      {folderFiles.map(({ file, path }, index) => (
-                        <div 
-                          key={index}
-                          className="flex items-center justify-between p-2 rounded bg-muted text-sm"
-                        >
+                      {folderFiles.map((uploadedFile, index) => (
+                        <div key={index} className="flex items-center justify-between p-2 rounded bg-muted text-sm">
                           <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <FileText className="w-4 h-4 text-primary flex-shrink-0" />
+                            {getFileIcon(uploadedFile.file.type, uploadedFile.category || "")}
                             <div className="min-w-0 flex-1">
-                              <span className="block truncate font-medium">{file.name}</span>
-                              <span className="block truncate text-xs text-muted-foreground">{path}</span>
+                              <div className="flex items-center gap-2">
+                                <span className="block truncate font-medium">{uploadedFile.file.name}</span>
+                                {uploadedFile.documentType && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                                    {uploadedFile.documentType}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="block truncate text-xs text-muted-foreground">{uploadedFile.path}</span>
+                              <span className="text-xs text-muted-foreground">
+                                {formatFileSize(uploadedFile.file.size)}
+                              </span>
                             </div>
-                            <span className="text-xs text-muted-foreground flex-shrink-0">
-                              {formatFileSize(file.size)}
-                            </span>
                           </div>
                           <Button
                             type="button"
@@ -1167,51 +1477,27 @@ export default function UploadPage() {
                     data-testid="folder-tags-input"
                   />
                   <div className="flex flex-wrap gap-2 mt-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('finance')) {
-                          const newTags = [...currentTags, 'finance'].join(', ');
-                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('finance') ? 'bg-green-50 border-green-200 text-green-700' : ''}`}
-                    >
-                      Finance
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('compliance')) {
-                          const newTags = [...currentTags, 'compliance'].join(', ');
-                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('compliance') ? 'bg-blue-50 border-blue-200 text-blue-700' : ''}`}
-                    >
-                      Compliance
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
-                        if (!currentTags.includes('meeting')) {
-                          const newTags = [...currentTags, 'meeting'].join(', ');
-                          setFolderFormData(prev => ({ ...prev, tags: newTags }));
-                        }
-                      }}
-                      className={`text-xs ${folderFormData.tags.toLowerCase().includes('meeting') ? 'bg-purple-50 border-purple-200 text-purple-700' : ''}`}
-                    >
-                      Meeting
-                    </Button>
+                    {['finance', 'compliance', 'meeting', 'technical', 'hr', 'marketing'].map(type => (
+                      <Button
+                        key={type}
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          const currentTags = folderFormData.tags.split(',').map(t => t.trim()).filter(t => t);
+                          if (!currentTags.includes(type)) {
+                            const newTags = [...currentTags, type].join(', ');
+                            setFolderFormData(prev => ({ ...prev, tags: newTags }));
+                          } else {
+                            const newTags = currentTags.filter(t => t !== type).join(', ');
+                            setFolderFormData(prev => ({ ...prev, tags: newTags }));
+                          }
+                        }}
+                        className={`text-xs ${folderFormData.tags.toLowerCase().includes(type) ? 'bg-primary/10 border-primary text-primary' : ''}`}
+                      >
+                        {type.charAt(0).toUpperCase() + type.slice(1)}
+                      </Button>
+                    ))}
                   </div>
                 </div>
               </CardContent>
