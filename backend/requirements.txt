@@ -137,3 +137,5 @@ python-docx
 openpyxl
 striprtf
 python-pptx
+olefile
+textract

@@ -746,7 +746,35 @@ class DocumentSummarizer:
                         return text.strip()
                     except:
                         return ""
-            
+                        # Word processing documents
+            elif category == "word_processing":
+                # DOCX files
+                if "openxmlformats" in content_type or filename.lower().endswith(".docx"):
+                    try:
+                        doc = Document(io.BytesIO(file_content))
+                        text = "\n".join([para.text for para in doc.paragraphs])
+                        return text.strip()
+                    except Exception as e:
+                        logger.error(f"DOCX extraction error: {e}")
+                
+                # Legacy DOC files - use enhanced extraction
+                elif content_type == "application/msword" or filename.lower().endswith(".doc"):
+                    try:
+                        return extract_legacy_doc_advanced(file_content)
+                    except Exception as e:
+                        logger.error(f"DOC extraction error: {e}")
+                        return "[Legacy DOC file - extraction failed]"
+                
+                # RTF files
+                elif "rtf" in content_type or filename.lower().endswith(".rtf"):
+                    try:
+                        rtf_text = file_content.decode('cp1252', errors='ignore')
+                        text = striprtf.rtf_to_text(rtf_text)
+                        return text.strip()
+                    except:
+                        return ""
+                
+                return ""
             # Image extraction with OCR
             elif category == "image" or content_type.startswith("image/"):
                 try:
@@ -1920,6 +1948,260 @@ async def check_disposition_deadlines():
                     )
 
 # ==================== TEXT EXTRACTION ====================
+def extract_legacy_doc_advanced(file_content: bytes) -> str:
+    """Advanced extraction for legacy DOC files using multiple methods"""
+    
+    # Method 1: Try to read as DOCX (some .doc files are actually DOCX)
+    if file_content[:2] == b'PK':
+        try:
+            doc = Document(io.BytesIO(file_content))
+            text = "\n".join([para.text for para in doc.paragraphs])
+            if text.strip():
+                logger.info("DOC file successfully extracted as DOCX")
+                return text.strip()
+        except:
+            pass
+    
+    # Method 2: Try to use python-olefile to extract text from OLE streams
+    try:
+        import olefile
+        
+        # Create a temporary file or use BytesIO
+        # Since olefile needs a file-like object with seek, we'll use a temporary file
+        import tempfile
+        
+        with tempfile.NamedTemporaryFile(suffix='.doc', delete=False) as tmp:
+            tmp.write(file_content)
+            tmp_path = tmp.name
+        
+        if olefile.isOleFile(tmp_path):
+            ole = olefile.OleFileIO(tmp_path)
+            extracted_text = []
+            
+            # Look for common text streams in DOC files
+            text_streams = [
+                'WordDocument',
+                '1Table',
+                '0Table',
+                'Data',
+                'SummaryInformation',
+                'DocumentSummaryInformation'
+            ]
+            
+            # Try to extract from each stream
+            for stream_name in text_streams:
+                if ole.exists(stream_name):
+                    try:
+                        stream = ole.openstream(stream_name)
+                        data = stream.read()
+                        
+                        # Decode the data (various encodings)
+                        for encoding in ['utf-16-le', 'utf-16-be', 'utf-8', 'latin-1']:
+                            try:
+                                decoded = data.decode(encoding, errors='ignore')
+                                # Filter out non-printable characters but keep spaces, newlines
+                                clean_text = ''.join(
+                                    ch for ch in decoded 
+                                    if ch.isprintable() or ch in '\n\r\t '
+                                )
+                                if clean_text.strip() and len(clean_text) > 50:
+                                    extracted_text.append(f"[From {stream_name}]:\n{clean_text}\n")
+                                    break
+                            except:
+                                continue
+                    except Exception as e:
+                        logger.debug(f"Error reading stream {stream_name}: {e}")
+            
+            # Try to extract from all streams (last resort)
+            if not extracted_text:
+                all_streams = ole.listdir()
+                for stream_path in all_streams:
+                    try:
+                        stream_name = '/'.join(stream_path)
+                        if ole.exists(stream_path):
+                            stream = ole.openstream(stream_path)
+                            data = stream.read()
+                            
+                            # Try to find readable text
+                            for encoding in ['utf-16-le', 'utf-16-be', 'latin-1']:
+                                try:
+                                    decoded = data.decode(encoding, errors='ignore')
+                                    # Look for sequences of readable text
+                                    import re
+                                    readable = re.findall(r'[\w\s.,!?;:\'\"-]{20,}', decoded)
+                                    if readable:
+                                        extracted_text.append(f"[From {stream_name}]:\n" + "\n".join(readable[:20]) + "\n")
+                                        break
+                                except:
+                                    continue
+                    except:
+                        continue
+            
+            ole.close()
+            os.unlink(tmp_path)
+            
+            if extracted_text:
+                combined_text = "\n".join(extracted_text)
+                logger.info(f"DOC file extracted via OLE: {len(combined_text)} chars")
+                return combined_text.strip()
+        else:
+            os.unlink(tmp_path)
+            
+    except ImportError:
+        logger.warning("olefile not installed. Install with: pip install olefile")
+    except Exception as e:
+        logger.error(f"OLE extraction error: {e}")
+        try:
+            os.unlink(tmp_path)
+        except:
+            pass
+    
+    # Method 3: Try to use antiword command-line tool
+    try:
+        import subprocess
+        import tempfile
+        
+        with tempfile.NamedTemporaryFile(suffix='.doc', delete=False) as tmp:
+            tmp.write(file_content)
+            tmp_path = tmp.name
+        
+        # Try antiword
+        try:
+            result = subprocess.run(
+                ['antiword', tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                os.unlink(tmp_path)
+                logger.info("DOC file extracted via antiword")
+                return result.stdout.strip()
+        except:
+            pass
+        
+        # Try catdoc
+        try:
+            result = subprocess.run(
+                ['catdoc', tmp_path],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                os.unlink(tmp_path)
+                logger.info("DOC file extracted via catdoc")
+                return result.stdout.strip()
+        except:
+            pass
+        
+        os.unlink(tmp_path)
+        
+    except Exception as e:
+        logger.debug(f"Command-line extraction failed: {e}")
+    
+    # Method 4: Try to use python-docx2txt (works for some DOC files too)
+    try:
+        import docx2txt
+        import tempfile
+        
+        with tempfile.NamedTemporaryFile(suffix='.doc', delete=False) as tmp:
+            tmp.write(file_content)
+            tmp_path = tmp.name
+        
+        try:
+            text = docx2txt.process(tmp_path)
+            if text and text.strip():
+                os.unlink(tmp_path)
+                logger.info("DOC file extracted via docx2txt")
+                return text.strip()
+        except:
+            pass
+        
+        os.unlink(tmp_path)
+        
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"docx2txt extraction failed: {e}")
+    
+    # Method 5: Try to use textract (universal document extractor)
+    try:
+        import textract
+        text = textract.process(io.BytesIO(file_content), encoding='utf-8', method='antiword')
+        if text and text.strip():
+            logger.info("DOC file extracted via textract")
+            return text.decode('utf-8').strip()
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"textract extraction failed: {e}")
+    
+    # Method 6: Try to extract using antiword via subprocess with stdin
+    try:
+        import subprocess
+        
+        # Try antiword with stdin
+        try:
+            process = subprocess.Popen(
+                ['antiword', '-'],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate(input=None, timeout=10)
+            # Actually we need to pass the file content via stdin, but antiword expects a file
+            # So this method may not work directly
+        except:
+            pass
+    except:
+        pass
+    
+    # Method 7: Last resort - extract readable text from binary data
+    try:
+        text = ""
+        readable_chunks = []
+        current_chunk = ""
+        min_chunk_length = 4
+        
+        # Look for readable text in the binary data
+        for i in range(min(len(file_content), 100000)):  # Limit to first 100KB
+            b = file_content[i]
+            # Check if byte is printable ASCII or common whitespace
+            if 32 <= b <= 126 or b in [9, 10, 13]:
+                current_chunk += chr(b)
+            else:
+                if len(current_chunk) > min_chunk_length:
+                    # Filter out chunks that look like garbage
+                    if any(c.isalpha() for c in current_chunk):
+                        readable_chunks.append(current_chunk)
+                current_chunk = ""
+        
+        # Add the last chunk if it exists
+        if len(current_chunk) > min_chunk_length:
+            if any(c.isalpha() for c in current_chunk):
+                readable_chunks.append(current_chunk)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_chunks = []
+        for chunk in readable_chunks:
+            if chunk not in seen:
+                seen.add(chunk)
+                unique_chunks.append(chunk)
+        
+        if unique_chunks:
+            text = "[Legacy DOC file - extracted readable text]\n\n"
+            text += "\n".join(unique_chunks[:100])  # Limit to 100 chunks
+            if text.strip():
+                logger.info(f"DOC file extracted via binary text extraction: {len(text)} chars")
+                return text.strip()
+                
+    except Exception as e:
+        logger.debug(f"Binary extraction failed: {e}")
+    
+    return "[Legacy DOC file - text extraction failed. Please convert to DOCX format.]"
 
 def extract_text_from_pdf(file_content: bytes) -> str:
     try:
@@ -1944,6 +2226,7 @@ def extract_text_from_docx(file_content: bytes) -> str:
         return ""
 
 def extract_text(file_content: bytes, content_type: str, filename: str) -> str:
+    
     if content_type == "application/pdf" or filename.lower().endswith(".pdf"):
         return extract_text_from_pdf(file_content)
     elif content_type in ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] or filename.lower().endswith(".docx"):
