@@ -46,7 +46,6 @@ import email
 from email import policy
 from email.parser import BytesParser
 import striprtf
-import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
 import json
@@ -1103,7 +1102,6 @@ class DocumentSummarizer:
                     # Extract text content from all documents
                     text_items = []
                     for item in book.get_items():
-                        if item.get_type() == ebooklib.ITEM_DOCUMENT:
                             try:
                                 content = item.get_content()
                                 # Parse HTML content
