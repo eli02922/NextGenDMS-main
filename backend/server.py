@@ -35,7 +35,6 @@ from typing import Tuple, Union
 from pydantic import BaseModel, Field, ConfigDict
 from datetime import datetime
 import magic
-import pytesseract
 from PIL import Image
 import fitz  # PyMuPDF
 import openpyxl
@@ -664,17 +663,6 @@ class DocumentSummarizer:
             except Exception as e:
                 logger.debug(f"OLE extraction failed: {e}")
             
-            # Method 5: Try to extract using textract
-            try:
-                import textract
-                text = textract.process(io.BytesIO(file_content), encoding='utf-8')
-                if text and text.strip():
-                    return text.decode('utf-8').strip()
-            except ImportError:
-                pass
-            except Exception as e:
-                logger.debug(f"Textract extraction failed: {e}")
-            
             # Method 6: Try to extract readable text from binary
             try:
                 # Look for readable text in the binary data
@@ -729,7 +717,6 @@ class DocumentSummarizer:
                             pix = page.get_pixmap()
                             img_data = pix.tobytes("png")
                             image = Image.open(io.BytesIO(img_data))
-                            page_text = pytesseract.image_to_string(image)
                         text += page_text + "\n"
                     doc.close()
                     return text.strip()
@@ -779,7 +766,6 @@ class DocumentSummarizer:
             elif category == "image" or content_type.startswith("image/"):
                 try:
                     image = Image.open(io.BytesIO(file_content))
-                    text = pytesseract.image_to_string(image)
                     return text.strip()
                 except Exception as e:
                     logger.error(f"Image OCR error: {e}")
@@ -2124,18 +2110,6 @@ def extract_legacy_doc_advanced(file_content: bytes) -> str:
         pass
     except Exception as e:
         logger.debug(f"docx2txt extraction failed: {e}")
-    
-    # Method 5: Try to use textract (universal document extractor)
-    try:
-        import textract
-        text = textract.process(io.BytesIO(file_content), encoding='utf-8', method='antiword')
-        if text and text.strip():
-            logger.info("DOC file extracted via textract")
-            return text.decode('utf-8').strip()
-    except ImportError:
-        pass
-    except Exception as e:
-        logger.debug(f"textract extraction failed: {e}")
     
     # Method 6: Try to extract using antiword via subprocess with stdin
     try:

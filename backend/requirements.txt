@@ -130,7 +130,6 @@ cohere
 flask-sqlalchemy
 flask-jwt-extended
 python-magic
-pytesseract
 Pillow
 PyMuPDF
 python-docx
@@ -138,4 +137,3 @@ openpyxl
 striprtf
 python-pptx
 olefile
-textract
