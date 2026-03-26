@@ -287,8 +287,8 @@ class DocumentSummarizer:
         # Clean and prepare text
         cleaned_text = self._clean_text(document_text)
         
-        if len(cleaned_text.split()) < 50:
-            raise ValueError("Text is too short to summarize (minimum 50 words)")
+        # if len(cleaned_text.split()) < 50:
+        #     raise ValueError("Text is too short to summarize (minimum 50 words)")
         
         # Truncate text if too long (Cohere has token limits)
         max_input_tokens = 4000  # Cohere's limit for many models
